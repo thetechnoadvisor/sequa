@@ -8,7 +8,10 @@ from llmcassette.cassette import cassette
 from llmcassette.llm.adapters.chat import LangChainGroqAdapter
 
 
-def patch_langchain_groq_invoke(adapter: Any | None = None) -> type[ChatGroq]:
+def patch_langchain(adapter: Any | None = None) -> type[ChatGroq]:
+    if getattr(ChatGroq.invoke, "__llmcassette_patched__", False):
+        return ChatGroq
+
     adapter = adapter or LangChainGroqAdapter()
     decorator = cassette(adapter=adapter)
     original_invoke = ChatGroq.invoke

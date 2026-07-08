@@ -9,12 +9,15 @@ def test_interceptor_wraps_real_call():
         }
 
     interceptor = RequestInterceptor()
-    canonical_request, canonical_response, result = interceptor.intercept(
+    res = interceptor.intercept(
         fake_sdk_call,
         {"messages": [{"role": "user", "content": "hello"}]},
         model="llama-3.1-8b-instant",
         temperature=0.1,
     )
+    canonical_request = res["request"]
+    canonical_response = res["response"]
+    result = res["raw"]
 
     assert canonical_request.provider == "langchain_groq"
     assert canonical_request.messages[0]["content"] == "hello"

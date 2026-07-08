@@ -2,9 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from llmcassette.cassette import cassette
-
-
 class LangChainGroqMonkeyPatch:
     def __init__(self, adapter: Any | None = None) -> None:
         self.adapter = adapter
@@ -12,9 +9,13 @@ class LangChainGroqMonkeyPatch:
             from llmcassette.llm.adapters.chat import LangChainGroqAdapter
 
             self.adapter = LangChainGroqAdapter()
+        from llmcassette.cassette import cassette
         self.decorator = cassette(adapter=self.adapter)
 
     def patch(self, cls: Any) -> Any:
+        if getattr(cls.invoke, "__llmcassette_patched__", False):
+            return cls
+
         original_invoke = cls.invoke
 
         @self.decorator

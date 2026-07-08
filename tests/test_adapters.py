@@ -10,7 +10,6 @@ def test_openai_adapter_maps_request_and_response():
     )
 
     assert request.provider == "openai"
-    assert request.operation == "chat.completions.create"
     assert request.model == "gpt-4o-mini"
     assert request.messages[0]["content"] == "hello"
     assert request.params["temperature"] == 0.2
@@ -49,7 +48,6 @@ def test_langchain_groq_adapter_maps_request_and_response():
     )
 
     assert request.provider == "langchain_groq"
-    assert request.operation == "chat.completions.create"
     assert request.model == "llama-3.1-8b-instant"
     assert request.params["temperature"] == 0.1
 
@@ -70,10 +68,13 @@ def test_cassette_decorator_can_wrap_callable():
     def fake_llm_call(*args, **kwargs):
         return {"choices": [{"message": {"role": "assistant", "content": "hi"}}]}
 
-    canonical_request, canonical_response, result = fake_llm_call(
+    res = fake_llm_call(
         {"messages": [{"role": "user", "content": "hello"}]},
         model="llama-3.1-8b-instant",
     )
+    canonical_request = res["request"]
+    canonical_response = res["response"]
+    result = res["raw"]
 
     assert canonical_request.provider == "langchain_groq"
     assert canonical_response.output == "hi"
@@ -89,4 +90,21 @@ def test_monkey_patch_wraps_invoke_method():
     patched = monkey_patch.patch(DummyModel)
 
     result = patched().invoke("hello")
-    assert result["choices"][0]["message"]["content"] == "hello"
+    assert result["raw"]["choices"][0]["message"]["content"] == "hello"
+
+
+def test_double_patching_does_not_nest():
+    class DummyModel:
+        def invoke(self, value, **kwargs):
+            return {"choices": [{"message": {"role": "assistant", "content": value}}]}
+
+    monkey_patch = LangChainGroqMonkeyPatch(adapter=LangChainGroqAdapter())
+    patched = monkey_patch.patch(DummyModel)
+    patched = monkey_patch.patch(DummyModel) # patch a second time
+
+    result = patched().invoke("hello")
+    # If double-patched, result["raw"] would be the dictionary returned from the first patch.
+    # If not double-patched, result["raw"] is the raw output from DummyModel.invoke.
+    assert isinstance(result["raw"], dict)
+    assert "choices" in result["raw"]
+    assert "raw" not in result["raw"]

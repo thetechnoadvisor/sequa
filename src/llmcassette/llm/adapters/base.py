@@ -8,22 +8,25 @@ from typing import Any
 @dataclass(slots=True)
 class CanonicalRequest:
     provider: str
-    operation: str
     model: str | None = None
     messages: list[dict[str, Any]] | None = None
     params: dict[str, Any] = field(default_factory=dict)
+    temperature: float | None = None
+    raw: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
 class CanonicalResponse:
     provider: str
-    operation: str
-    model: str | None = None
     output: Any = None
+    model: str | None = None
+    tool_calls: list[Any] = field(default_factory=list)
+    invalid_tool_calls: list[Any] = field(default_factory=list)
+    latency: float | None = None
+    reasoning: str | None = None
     usage: dict[str, Any] | None = None
-    finish_reason: str | None = None
-    raw: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class ProviderAdapter(ABC):
@@ -53,4 +56,6 @@ class AdapterRegistry:
         try:
             return self._adapters[provider_name]
         except KeyError as exc:
-            raise KeyError(f"No adapter registered for provider: {provider_name}") from exc
+            raise KeyError(
+                f"No adapter registered for provider: {provider_name}"
+            ) from exc
