@@ -50,6 +50,7 @@ class cassette:
             normalizer=self.normalizer,
         )
         self.original_methods: list[tuple[type, str, Any]] = []
+        self.patchers: list[Any] = []
 
     def __enter__(self) -> cassette:
         # 1. Push self.engine onto thread-local context stack
@@ -103,6 +104,26 @@ class cassette:
         except ImportError:
             pass
 
+        # 3. Patch OpenAI if installed
+        try:
+            import openai
+            from sequa.llm.adapters.patch_openai import OpenAIMonkeyPatch
+            op_patcher = OpenAIMonkeyPatch()
+            op_patcher.patch()
+            self.patchers.append(op_patcher)
+        except ImportError:
+            pass
+
+        # 4. Patch Anthropic if installed
+        try:
+            import anthropic
+            from sequa.llm.adapters.patch_anthropic import AnthropicMonkeyPatch
+            ant_patcher = AnthropicMonkeyPatch()
+            ant_patcher.patch()
+            self.patchers.append(ant_patcher)
+        except ImportError:
+            pass
+
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -114,6 +135,11 @@ class cassette:
         for cls, attr, original in self.original_methods:
             setattr(cls, attr, original)
         self.original_methods.clear()
+
+        # 3. Restore OpenAI and Anthropic patchers
+        for patcher in self.patchers:
+            patcher.restore()
+        self.patchers.clear()
 
     def intercept(
         self, fn: Callable[..., Any], *args: Any, **kwargs: Any
