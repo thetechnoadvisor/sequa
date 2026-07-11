@@ -1,5 +1,5 @@
-from llmcassette.cassette import cassette
-from llmcassette.llm.adapters import AdapterRegistry, CanonicalRequest, CanonicalResponse, OpenAIAdapter, LangChainGroqAdapter, LangChainGroqMonkeyPatch
+from sequa.cassette import cassette
+from sequa.llm.adapters import AdapterRegistry, CanonicalRequest, CanonicalResponse, OpenAIAdapter, LangChainGroqAdapter, LangChainGroqMonkeyPatch
 
 def test_openai_adapter_maps_request_and_response():
     adapter = OpenAIAdapter()

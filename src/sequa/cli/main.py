@@ -24,7 +24,7 @@ def load_all_cassettes(path: str) -> list[tuple[str, dict[str, Any]]]:
                     try:
                         with open(file_path, "r", encoding="utf-8") as f:
                             data = json.load(f)
-                            # Simple validation to verify it is an LLMCassette file
+                            # Simple validation to verify it is a Sequa cassette file
                             if "request" in data and "response" in data:
                                 cassettes.append((file_path, data))
                     except Exception as e:
@@ -63,7 +63,7 @@ def cmd_stats(args: argparse.Namespace) -> int:
                 pass
 
     print("========================================")
-    print(" LLMCassette Statistics")
+    print(" Sequa Statistics")
     print("========================================")
     print(f"Total Cassettes:      {count}")
     print(f"Total Size on Disk:   {total_size_bytes / 1024:.2f} KB ({total_size_bytes} bytes)")
@@ -128,7 +128,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
                 modified = True
 
         # 3. Format/Sort keys cleanly (always done during clean)
-        from llmcassette.utils import sort_dict_keys
+        from sequa.utils import sort_dict_keys
         data = sort_dict_keys(data)
         modified = True
 
@@ -146,7 +146,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="LLMCassette CLI - Manage and inspect your LLM snapshot cassettes."
+        description="Sequa CLI - Manage and inspect your LLM snapshot cassettes."
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

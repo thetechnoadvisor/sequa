@@ -6,7 +6,7 @@ from functools import wraps
 from typing import Any, Callable, TypeVar, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from llmcassette.recorder import RecorderEngine
+    from sequa.recorder import RecorderEngine
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -38,11 +38,11 @@ class cassette:
         self.adapter = adapter
 
         if self.adapter is None:
-            from llmcassette.llm.adapters.chat import LangChainGroqAdapter
+            from sequa.llm.adapters.chat import LangChainGroqAdapter
 
             self.adapter = LangChainGroqAdapter()
 
-        from llmcassette.recorder import RecorderEngine
+        from sequa.recorder import RecorderEngine
         self.engine = RecorderEngine(
             path=self.path,
             mode=self.mode,
@@ -62,7 +62,7 @@ class cassette:
             from langchain_groq import ChatGroq
 
             # Sync invoke
-            if not getattr(ChatGroq.invoke, "__llmcassette_patched__", False):
+            if not getattr(ChatGroq.invoke, "__sequa_patched__", False):
                 original_invoke = ChatGroq.invoke
                 self.original_methods.append((ChatGroq, "invoke", original_invoke))
 
@@ -76,12 +76,12 @@ class cassette:
 
                     return active_engine.handle_call(self.adapter, make_live_call, self_obj, *args, **kwargs)
 
-                wrapped_invoke.__llmcassette_patched__ = True
+                wrapped_invoke.__sequa_patched__ = True
                 ChatGroq.invoke = wrapped_invoke
 
             # Async ainvoke
             if hasattr(ChatGroq, "ainvoke"):
-                if not getattr(ChatGroq.ainvoke, "__llmcassette_patched__", False):
+                if not getattr(ChatGroq.ainvoke, "__sequa_patched__", False):
                     original_ainvoke = ChatGroq.ainvoke
                     self.original_methods.append((ChatGroq, "ainvoke", original_ainvoke))
 
@@ -97,7 +97,7 @@ class cassette:
                             self.adapter, make_live_call, self_obj, *args, **kwargs
                         )
 
-                    wrapped_ainvoke.__llmcassette_patched__ = True
+                    wrapped_ainvoke.__sequa_patched__ = True
                     ChatGroq.ainvoke = wrapped_ainvoke
 
         except ImportError:
@@ -150,7 +150,7 @@ class cassette:
                         "response": canonical_response,
                         "raw": result,
                     }
-            wrapped_async.__llmcassette_patched__ = True
+            wrapped_async.__sequa_patched__ = True
             return wrapped_async  # type: ignore
         else:
             @wraps(fn)
@@ -171,5 +171,5 @@ class cassette:
                         "response": canonical_response,
                         "raw": result,
                     }
-            wrapped_sync.__llmcassette_patched__ = True
+            wrapped_sync.__sequa_patched__ = True
             return wrapped_sync  # type: ignore

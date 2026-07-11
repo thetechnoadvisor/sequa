@@ -4,12 +4,12 @@ from typing import Any
 
 from langchain_groq import ChatGroq
 
-from llmcassette.cassette import cassette
-from llmcassette.llm.adapters.chat import LangChainGroqAdapter
+from sequa.cassette import cassette
+from sequa.llm.adapters.chat import LangChainGroqAdapter
 
 
 def patch_langchain(adapter: Any | None = None) -> type[ChatGroq]:
-    if getattr(ChatGroq.invoke, "__llmcassette_patched__", False):
+    if getattr(ChatGroq.invoke, "__sequa_patched__", False):
         return ChatGroq
 
     adapter = adapter or LangChainGroqAdapter()

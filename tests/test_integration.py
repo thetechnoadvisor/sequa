@@ -6,8 +6,8 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_groq import ChatGroq
 
-from llmcassette.cassette import cassette
-from llmcassette.recorder import CassetteNotFoundError
+from sequa.cassette import cassette
+from sequa.recorder import CassetteNotFoundError
 
 
 def test_groq_record_and_replay_flow():

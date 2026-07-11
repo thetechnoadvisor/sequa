@@ -1,5 +1,5 @@
-from llmcassette.matcher import normalize, hash_request, match
-from llmcassette.llm.adapters.base import CanonicalRequest
+from sequa.matcher import normalize, hash_request, match
+from sequa.llm.adapters.base import CanonicalRequest
 
 
 def test_normalize_cleans_and_structures():

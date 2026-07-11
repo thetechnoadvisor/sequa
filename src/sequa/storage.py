@@ -4,7 +4,7 @@ import json
 import os
 from typing import Any
 
-from llmcassette.models import Cassette
+from sequa.models import Cassette
 
 
 def save(cassette: Cassette, path: str) -> None:

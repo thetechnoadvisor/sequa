@@ -1,4 +1,4 @@
-from llmcassette.llm.adapters import RequestInterceptor
+from sequa.llm.adapters import RequestInterceptor
 
 
 def test_interceptor_wraps_real_call():

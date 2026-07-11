@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from llmcassette.cli.main import main
+from sequa.cli.main import main
 
 
 def test_cli_stats_inspect_clean(capsys):
@@ -36,7 +36,7 @@ def test_cli_stats_inspect_clean(capsys):
             json.dump(cassette_data, f)
 
         # 1. Test stats command
-        with patch("sys.argv", ["llmcassette", "stats", "--path", tmpdir]):
+        with patch("sys.argv", ["sequa", "stats", "--path", tmpdir]):
             with pytest.raises(SystemExit) as excinfo:
                 main()
             assert excinfo.value.code == 0
@@ -46,7 +46,7 @@ def test_cli_stats_inspect_clean(capsys):
         assert "Total Latency Saved:  0.45 seconds" in captured.out
 
         # 2. Test inspect command
-        with patch("sys.argv", ["llmcassette", "inspect", "--path", tmpdir]):
+        with patch("sys.argv", ["sequa", "inspect", "--path", tmpdir]):
             with pytest.raises(SystemExit) as excinfo:
                 main()
             assert excinfo.value.code == 0
@@ -56,7 +56,7 @@ def test_cli_stats_inspect_clean(capsys):
         assert "llama-3.1-8b-instant" in captured.out
 
         # 3. Test clean command
-        with patch("sys.argv", ["llmcassette", "clean", "--path", tmpdir, "--remove-latency", "--remove-timestamps"]):
+        with patch("sys.argv", ["sequa", "clean", "--path", tmpdir, "--remove-latency", "--remove-timestamps"]):
             with pytest.raises(SystemExit) as excinfo:
                 main()
             assert excinfo.value.code == 0

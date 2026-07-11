@@ -4,8 +4,8 @@ import hashlib
 import json
 from typing import Any
 
-from llmcassette.llm.adapters.base import CanonicalRequest
-from llmcassette.utils import sort_dict_keys
+from sequa.llm.adapters.base import CanonicalRequest
+from sequa.utils import sort_dict_keys
 
 
 def normalize(req: dict[str, Any] | CanonicalRequest) -> dict[str, Any]:

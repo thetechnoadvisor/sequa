@@ -4,17 +4,17 @@ import os
 import time
 from typing import Any, Callable
 
-from llmcassette.llm.adapters.base import CanonicalRequest, CanonicalResponse, ProviderAdapter
-from llmcassette.matcher import hash_request
-from llmcassette.models import Cassette
-from llmcassette import storage
+from sequa.llm.adapters.base import CanonicalRequest, CanonicalResponse, ProviderAdapter
+from sequa.matcher import hash_request
+from sequa.models import Cassette
+from sequa import storage
 
 
-class LLMCassetteError(Exception):
-    """Base exception for LLMCassette."""
+class SequaError(Exception):
+    """Base exception for Sequa."""
 
 
-class CassetteNotFoundError(LLMCassetteError):
+class CassetteNotFoundError(SequaError):
     """Exception raised when a cassette is missing in replay mode."""
 
 

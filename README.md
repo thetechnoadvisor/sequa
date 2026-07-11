@@ -1,6 +1,6 @@
-# LLMCassette 📼
+# Sequa 📼
 
-LLMCassette is snapshot testing for LLM applications. Record once, replay forever.
+Sequa is snapshot testing for LLM applications. Record once, replay forever.
 
 ---
 
@@ -18,7 +18,7 @@ response = model.invoke("Write a 3-word slogan for gravity.")
 ### After
 ```python
 from langchain_groq import ChatGroq
-from llmcassette import cassette
+from sequa import cassette
 
 model = ChatGroq(model_name="llama-3.1-8b-instant")
 
@@ -53,7 +53,7 @@ uv pip install -e .
 
 ### 1. Execution Modes
 
-Control LLMCassette behavior via the `mode` parameter:
+Control Sequa behavior via the `mode` parameter:
 
 ```python
 with cassette("tests/cassettes", mode="replay"):
@@ -94,24 +94,24 @@ with cassette("tests/cassettes", normalizer=redact_dates):
 
 ## Command Line Interface (CLI)
 
-LLMCassette comes with a CLI tool to manage your cassettes.
+Sequa comes with a CLI tool to manage your cassettes.
 
 ### Stats
 Show the number of cassettes, total size on disk, and estimated API latency saved:
 ```bash
-llmcassette stats --path ./tests/cassettes
+sequa stats --path ./tests/cassettes
 ```
 
 ### Inspect
 List all stored cassettes, their model, provider, and when they were recorded:
 ```bash
-llmcassette inspect --path ./tests/cassettes
+sequa inspect --path ./tests/cassettes
 ```
 
 ### Clean
 Clean dynamic fields (`latency`, `created_at`) from cassettes to prevent noisy git diffs:
 ```bash
-llmcassette clean --path ./tests/cassettes --remove-latency --remove-timestamps
+sequa clean --path ./tests/cassettes --remove-latency --remove-timestamps
 ```
 
 ---

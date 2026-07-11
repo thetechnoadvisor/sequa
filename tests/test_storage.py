@@ -1,7 +1,7 @@
 import os
 import tempfile
-from llmcassette.models import Cassette
-from llmcassette.storage import save, load, exists, delete
+from sequa.models import Cassette
+from sequa.storage import save, load, exists, delete
 
 
 def test_cassette_serialization_and_storage():
