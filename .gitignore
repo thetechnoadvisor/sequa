@@ -101,3 +101,5 @@ tempCodeRunnerFile.py
 # macOS
 .DS_Store
 **/.DS_Store
+
+demo_cassettes/
