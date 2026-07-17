@@ -30,7 +30,8 @@ class OpenAIMonkeyPatch:
                 def make_live_call(*a: Any, **kw: Any) -> Any:
                     return self.original_create(self_obj, *a, **kw)
                 
-                return active_engine.handle_call(self.adapter, make_live_call, self_obj, *args, **kwargs)
+                is_stream = kwargs.get("stream") is True
+                return active_engine.handle_call(self.adapter, make_live_call, self_obj, *args, is_stream=is_stream, **kwargs)
 
             wrapped_create.__llmcassette_patched__ = True
             Completions.create = wrapped_create
@@ -46,7 +47,8 @@ class OpenAIMonkeyPatch:
                 async def make_live_call(*a: Any, **kw: Any) -> Any:
                     return await self.original_async_create(self_obj, *a, **kw)
                 
-                return await active_engine.handle_call_async(self.adapter, make_live_call, self_obj, *args, **kwargs)
+                is_stream = kwargs.get("stream") is True
+                return await active_engine.handle_call_async(self.adapter, make_live_call, self_obj, *args, is_stream=is_stream, **kwargs)
 
             wrapped_async_create.__llmcassette_patched__ = True
             AsyncCompletions.create = wrapped_async_create

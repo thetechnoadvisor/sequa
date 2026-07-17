@@ -30,12 +30,14 @@ class cassette:
         ignore_fields: list[str] | None = None,
         normalizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         adapter: Any | None = None,
+        mask_pii: bool = False,
     ) -> None:
         self.path = path
         self.mode = mode
         self.ignore_fields = ignore_fields or []
         self.normalizer = normalizer
         self.adapter = adapter
+        self.mask_pii = mask_pii
 
         if self.adapter is None:
             from sequa.llm.adapters.chat import LangChainGroqAdapter
@@ -48,6 +50,7 @@ class cassette:
             mode=self.mode,
             ignore_fields=self.ignore_fields,
             normalizer=self.normalizer,
+            mask_pii=self.mask_pii,
         )
         self.original_methods: list[tuple[type, str, Any]] = []
         self.patchers: list[Any] = []
@@ -100,6 +103,53 @@ class cassette:
 
                     wrapped_ainvoke.__sequa_patched__ = True
                     ChatGroq.ainvoke = wrapped_ainvoke
+
+            # Sync stream
+            if hasattr(ChatGroq, "stream"):
+                if not getattr(ChatGroq.stream, "__sequa_patched__", False):
+                    original_stream = ChatGroq.stream
+                    self.original_methods.append((ChatGroq, "stream", original_stream))
+
+                    def wrapped_stream(self_obj: ChatGroq, *args: Any, **kwargs: Any) -> Any:
+                        active_engine = get_active_engine()
+                        if active_engine is None:
+                            return original_stream(self_obj, *args, **kwargs)
+
+                        def make_live_call(s: Any, *a: Any, **kw: Any) -> Any:
+                            return original_stream(s, *a, **kw)
+
+                        return active_engine.handle_call(
+                            self.adapter, make_live_call, self_obj, *args, is_stream=True, **kwargs
+                        )
+
+                    wrapped_stream.__sequa_patched__ = True
+                    ChatGroq.stream = wrapped_stream
+
+            # Async astream
+            if hasattr(ChatGroq, "astream"):
+                if not getattr(ChatGroq.astream, "__sequa_patched__", False):
+                    original_astream = ChatGroq.astream
+                    self.original_methods.append((ChatGroq, "astream", original_astream))
+
+                    def wrapped_astream(self_obj: ChatGroq, *args: Any, **kwargs: Any) -> Any:
+                        active_engine = get_active_engine()
+                        if active_engine is None:
+                            return original_astream(self_obj, *args, **kwargs)
+
+                        async def stream_generator():
+                            async def make_live_call(s: Any, *a: Any, **kw: Any) -> Any:
+                                return original_astream(s, *a, **kw)
+
+                            replay_stream = await active_engine.handle_call_async(
+                                self.adapter, make_live_call, self_obj, *args, is_stream=True, **kwargs
+                            )
+                            async for chunk in replay_stream:
+                                yield chunk
+
+                        return stream_generator()
+
+                    wrapped_astream.__sequa_patched__ = True
+                    ChatGroq.astream = wrapped_astream
 
         except ImportError:
             pass
