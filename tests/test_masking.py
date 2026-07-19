@@ -150,8 +150,13 @@ def test_masking_integration():
                 assert last_kwargs[-1]["messages"][0]["content"] == "Contact me at alice@example.com."
 
             # Clear cassettes for the next run
+            import shutil
             for f in os.listdir(tmpdir):
-                os.remove(os.path.join(tmpdir, f))
+                fpath = os.path.join(tmpdir, f)
+                if os.path.isdir(fpath):
+                    shutil.rmtree(fpath)
+                else:
+                    os.remove(fpath)
 
             # Now test with mask_pii=True
             with cassette(tmpdir, mode="record", mask_pii=True, adapter=sys.modules["sequa.llm.adapters"].OpenAIAdapter()) as cas:
@@ -164,9 +169,9 @@ def test_masking_integration():
                 assert last_kwargs[-1]["messages"][0]["content"] == "Contact me at [EMAIL] or call [PHONE]."
 
             # Verify that the recorded cassette file also contains the masked content
-            files = os.listdir(tmpdir)
+            files = [os.path.join(root, f) for root, _, fs in os.walk(tmpdir) for f in fs if f.endswith(".json") and f != "metadata.json"]
             assert len(files) == 1
-            cassette_path = os.path.join(tmpdir, files[0])
+            cassette_path = files[0]
             cassette_obj = storage.load(cassette_path)
             
             # Verify the recorded request matches the masked content

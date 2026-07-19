@@ -270,12 +270,41 @@ class RecorderEngine:
         if self.mode not in ("replay", "record", "auto", "live"):
             raise ValueError(f"Invalid mode: {self.mode}. Must be replay, record, auto, or live.")
 
-    def get_cassette_path(self, req_hash: str) -> str:
-        """Resolve the path to the cassette file based on request hash and configured path."""
-        # If the path is a directory (does not end in .json), append the hash filename
-        if not self.path.lower().endswith(".json"):
-            return os.path.join(self.path, f"{req_hash}.json")
-        return self.path
+    def get_cassette_path(self, req_hash: str, provider: str = "") -> str:
+        """Resolve the path to the cassette file based on request hash, provider, and configured path."""
+        if self.path.lower().endswith(".json"):
+            return self.path
+
+        provider_dir = provider.strip().lower() if provider else "default"
+        return os.path.join(self.path, provider_dir, f"{req_hash}.json")
+
+    def find_cassette_path(self, req_hash: str, provider: str = "") -> str:
+        """Find existing cassette path or return default destination for saving."""
+        if self.path.lower().endswith(".json"):
+            return self.path
+
+        # 1. Check primary provider path
+        if provider:
+            provider_dir = provider.strip().lower()
+            primary_path = os.path.join(self.path, provider_dir, f"{req_hash}.json")
+            if storage.exists(primary_path):
+                return primary_path
+
+        # 2. Check legacy path directly under self.path
+        legacy_path = os.path.join(self.path, f"{req_hash}.json")
+        if storage.exists(legacy_path):
+            return legacy_path
+
+        # 3. Check any subfolder under self.path
+        target_file = f"{req_hash}.json"
+        if os.path.isdir(self.path):
+            for root, _, files in os.walk(self.path):
+                if target_file in files:
+                    return os.path.join(root, target_file)
+
+        # 4. Default saving path
+        return self.get_cassette_path(req_hash, provider)
+
 
     def mask_pii_and_si(self, text: str) -> str:
         """Mask emails, phone numbers, and common PII/SI in a string."""
@@ -383,7 +412,8 @@ class RecorderEngine:
 
         # 2. Hash request
         req_hash = hash_request(canonical_req, self.ignore_fields)
-        cassette_path = self.get_cassette_path(req_hash)
+        cassette_path = self.find_cassette_path(req_hash, canonical_req.provider)
+        save_path = self.get_cassette_path(req_hash, canonical_req.provider)
 
         # Mode: live
         if self.mode == "live":
@@ -472,7 +502,7 @@ class RecorderEngine:
                     response=serialized_resp,
                     metadata={"latency_ms": latency},
                 )
-                storage.save(cassette_obj, cassette_path)
+                storage.save(cassette_obj, save_path, base_dir=self.path)
                 
             return ReplayStream(record_gen())
 
@@ -496,7 +526,7 @@ class RecorderEngine:
             response=serialized_resp,
             metadata={"latency_ms": latency},
         )
-        storage.save(cassette_obj, cassette_path)
+        storage.save(cassette_obj, save_path, base_dir=self.path)
 
         return live_response
 
@@ -540,7 +570,8 @@ class RecorderEngine:
 
         # 2. Hash request
         req_hash = hash_request(canonical_req, self.ignore_fields)
-        cassette_path = self.get_cassette_path(req_hash)
+        cassette_path = self.find_cassette_path(req_hash, canonical_req.provider)
+        save_path = self.get_cassette_path(req_hash, canonical_req.provider)
 
         # Mode: live
         if self.mode == "live":
@@ -629,7 +660,7 @@ class RecorderEngine:
                     response=serialized_resp,
                     metadata={"latency_ms": latency},
                 )
-                storage.save(cassette_obj, cassette_path)
+                storage.save(cassette_obj, save_path, base_dir=self.path)
                 
             return ReplayAsyncStream(record_async_gen())
 
@@ -653,7 +684,7 @@ class RecorderEngine:
             response=serialized_resp,
             metadata={"latency_ms": latency},
         )
-        storage.save(cassette_obj, cassette_path)
+        storage.save(cassette_obj, save_path, base_dir=self.path)
 
         return live_response
 

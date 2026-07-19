@@ -11,6 +11,8 @@ def load_all_cassettes(path: str) -> list[tuple[str, dict[str, Any]]]:
     """Finds and loads all JSON cassette files in the given directory or file path."""
     cassettes = []
     if os.path.isfile(path) and path.endswith(".json"):
+        if os.path.basename(path) == "metadata.json":
+            return cassettes
         try:
             with open(path, "r", encoding="utf-8") as f:
                 cassettes.append((path, json.load(f)))
@@ -18,8 +20,8 @@ def load_all_cassettes(path: str) -> list[tuple[str, dict[str, Any]]]:
             print(f"Error loading {path}: {e}", file=sys.stderr)
     elif os.path.isdir(path):
         for root, _, files in os.walk(path):
-            for file in files:
-                if file.endswith(".json"):
+            for file in sorted(files):
+                if file.endswith(".json") and file != "metadata.json":
                     file_path = os.path.join(root, file)
                     try:
                         with open(file_path, "r", encoding="utf-8") as f:
@@ -27,7 +29,7 @@ def load_all_cassettes(path: str) -> list[tuple[str, dict[str, Any]]]:
                             # Simple validation to verify it is a Sequa cassette file
                             if "request" in data and "response" in data:
                                 cassettes.append((file_path, data))
-                    except Exception as e:
+                    except Exception:
                         # Skip files that are not valid JSON or not cassettes
                         pass
     return cassettes
@@ -139,6 +141,10 @@ def cmd_clean(args: argparse.Namespace) -> int:
                 cleaned_count += 1
             except Exception as e:
                 print(f"Error writing to {path}: {e}", file=sys.stderr)
+
+    if os.path.isdir(args.path):
+        from sequa.storage import update_metadata_index
+        update_metadata_index(args.path)
 
     print(f"Successfully formatted/cleaned {cleaned_count} cassettes.")
     return 0

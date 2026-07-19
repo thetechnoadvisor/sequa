@@ -219,9 +219,9 @@ def test_streaming_pii_masking():
             chunks = list(stream)
             
         # Replay should work and cassette file should have masked values
-        files = os.listdir(tmpdir)
+        files = [os.path.join(root, f) for root, _, fs in os.walk(tmpdir) for f in fs if f.endswith(".json") and f != "metadata.json"]
         assert len(files) == 1
-        cassette_path = os.path.join(tmpdir, files[0])
+        cassette_path = files[0]
         cassette_obj = storage.load(cassette_path)
         
         # Verify prompt masking inside recorded request

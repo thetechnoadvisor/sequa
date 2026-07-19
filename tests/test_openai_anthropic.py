@@ -153,9 +153,11 @@ def test_openai_record_and_replay_sync():
             assert getattr(res, "id") == "msg-openai-123"
             assert res.choices[0].message.content == "Hello from mock OpenAI!"
 
-        # Check cassette was recorded
-        files = os.listdir(tmpdir)
+        # Check cassette was recorded in provider subfolder
+        files = [os.path.join(root, f) for root, _, fs in os.walk(tmpdir) for f in fs if f.endswith(".json") and f != "metadata.json"]
         assert len(files) == 1
+        assert os.path.exists(os.path.join(tmpdir, "openai"))
+        assert os.path.exists(os.path.join(tmpdir, "metadata.json"))
 
         # 2. Replay Mode
         # Override original completions class method to verify it is NOT called during replay
@@ -219,9 +221,11 @@ def test_anthropic_record_and_replay_sync():
             assert getattr(res, "id") == "msg-anthropic-123"
             assert res.content[0].text == "Hello from mock Anthropic!"
 
-        # Check cassette was recorded
-        files = os.listdir(tmpdir)
+        # Check cassette was recorded in provider subfolder
+        files = [os.path.join(root, f) for root, _, fs in os.walk(tmpdir) for f in fs if f.endswith(".json") and f != "metadata.json"]
         assert len(files) == 1
+        assert os.path.exists(os.path.join(tmpdir, "anthropic"))
+        assert os.path.exists(os.path.join(tmpdir, "metadata.json"))
 
         # 2. Replay Mode
         original_create = MockMessages.create

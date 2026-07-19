@@ -36,9 +36,9 @@ def test_groq_record_and_replay_flow():
                 assert mock_live_call.call_count == 1
 
             # Check file was saved. We can search files in tmpdir.
-            files = os.listdir(tmpdir)
+            files = [os.path.join(root, f) for root, _, fs in os.walk(tmpdir) for f in fs if f.endswith(".json") and f != "metadata.json"]
             assert len(files) == 1
-            cassette_file_path = os.path.join(tmpdir, files[0])
+            cassette_file_path = files[0]
 
             # Reset call count
             mock_live_call.reset_mock()
