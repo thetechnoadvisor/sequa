@@ -1,7 +1,7 @@
 [project]
 name = "sequa"
 version = "0.0.5"
-description = "Add your description here"
+description = "Snapshot Testing for LLM Applications"
 readme = "README.md"
 authors = [
     { name = "thetechnoadvisor", email = "thetechnoadvisor@gmail.com" }
