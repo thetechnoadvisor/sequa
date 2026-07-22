@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .base import CanonicalRequest, CanonicalResponse, ProviderAdapter
+from sequa.utils import serialize_type_or_pydantic
 
 
 class LangChainGroqAdapter(ProviderAdapter):
@@ -51,7 +52,7 @@ class LangChainGroqAdapter(ProviderAdapter):
             model=model,
             temperature=temperature,
             messages=messages_list,
-            params=kwargs,
+            params=serialize_type_or_pydantic(kwargs),
             metadata={"raw_request": raw_payload},
         )
 
@@ -63,15 +64,15 @@ class LangChainGroqAdapter(ProviderAdapter):
                 provider=self.provider_name,
                 output=content,
                 model=payload.response_metadata.get("model_name"),
-                tool_calls=payload.tool_calls,
-                invalid_tool_calls=payload.invalid_tool_calls,
+                tool_calls=getattr(payload, "tool_calls", []),
+                invalid_tool_calls=getattr(payload, "invalid_tool_calls", []),
                 latency=payload.response_metadata.get("total_time"),
                 reasoning=(
                     payload.response_metadata.get("token_usage", {}).get("reasoning_content")
                     if payload.response_metadata.get("token_usage")
                     else None
                 ),
-                usage=payload.usage_metadata,
+                usage=getattr(payload, "usage_metadata", None),
                 metadata={
                     "raw_response": {
                         "id": getattr(payload, "id", None),
@@ -92,7 +93,7 @@ class LangChainGroqAdapter(ProviderAdapter):
             metadata={"raw_response": payload},
         )
 
-    def from_canonical_response(self, response: CanonicalResponse, request: Any) -> Any:
+    def from_canonical_response(self, response: CanonicalResponse, request: Any, is_parse: bool = False, **kwargs: Any) -> Any:
         raw_resp = response.metadata.get("raw_response")
         resp_id = "replayed-response"
         finish_reason = "stop"
@@ -215,7 +216,7 @@ class OpenAIAdapter(ProviderAdapter):
             model=model,
             temperature=temperature,
             messages=normalized_messages,
-            params=params,
+            params=serialize_type_or_pydantic(params),
             metadata={"raw_request": kwargs},
         )
 
@@ -290,7 +291,7 @@ class OpenAIAdapter(ProviderAdapter):
             }
         )
 
-    def from_canonical_response(self, response: CanonicalResponse, request: Any) -> Any:
+    def from_canonical_response(self, response: CanonicalResponse, request: Any, is_parse: bool = False, **kwargs: Any) -> Any:
         raw_resp = response.metadata.get("raw_response", {})
         resp_id = raw_resp.get("id") or "replayed-response"
         choices_data = raw_resp.get("choices") or []
@@ -309,6 +310,7 @@ class OpenAIAdapter(ProviderAdapter):
             
         usage_data = response.usage or {}
 
+        replayed_completion = None
         try:
             from openai.types.chat import ChatCompletion
             from openai.types.chat.chat_completion import Choice, ChoiceMessage
@@ -334,7 +336,7 @@ class OpenAIAdapter(ProviderAdapter):
                     total_tokens=usage_data.get("total_tokens", 0),
                 )
                 
-            return ChatCompletion(
+            replayed_completion = ChatCompletion(
                 id=resp_id,
                 choices=choices,
                 created=123456789,
@@ -385,9 +387,38 @@ class OpenAIAdapter(ProviderAdapter):
                     usage_data.get("total_tokens") or 0,
                 )
                 
-            return MockChatCompletion(
+            replayed_completion = MockChatCompletion(
                 id=resp_id,
                 choices=choices,
                 model=response.model or "replayed-model",
                 usage=usage,
             )
+
+        response_format = kwargs.get("response_format")
+        if is_parse or response_format:
+            try:
+                from openai.resources.chat.completions.completions import _parse_chat_completion
+                input_tools = kwargs.get("tools") or []
+                return _parse_chat_completion(
+                    response_format=response_format,
+                    chat_completion=replayed_completion,
+                    input_tools=input_tools,
+                )
+            except Exception:
+                pass
+
+            if hasattr(replayed_completion, "choices") and replayed_completion.choices:
+                msg_obj = getattr(replayed_completion.choices[0], "message", None)
+                if msg_obj is not None:
+                    content_text = getattr(msg_obj, "content", None)
+                    parsed_val = None
+                    if content_text and hasattr(response_format, "model_validate_json"):
+                        try:
+                            parsed_val = response_format.model_validate_json(content_text)
+                        except Exception:
+                            pass
+                    if not hasattr(msg_obj, "parsed"):
+                        setattr(msg_obj, "parsed", parsed_val)
+
+        return replayed_completion
+

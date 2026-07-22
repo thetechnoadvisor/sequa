@@ -8,6 +8,7 @@ from sequa.llm.adapters.base import CanonicalRequest, CanonicalResponse, Provide
 from sequa.matcher import hash_request
 from sequa.models import Cassette
 from sequa import storage
+from sequa.utils import serialize_type_or_pydantic
 
 
 class SequaError(Exception):
@@ -21,6 +22,8 @@ class CassetteNotFoundError(SequaError):
 def to_serializable(val: Any) -> Any:
     if isinstance(val, (str, int, float, bool, type(None))):
         return val
+    if isinstance(val, type) or callable(val):
+        return serialize_type_or_pydantic(val)
     if isinstance(val, dict):
         return {k: to_serializable(v) for k, v in val.items()}
     if isinstance(val, list):
@@ -378,6 +381,7 @@ class RecorderEngine:
         make_live_call_fn: Callable[..., Any],
         *args: Any,
         is_stream: bool = False,
+        is_parse: bool = False,
         **kwargs: Any,
     ) -> Any:
         """Intercepts the call, checking the cache according to the execution mode."""
@@ -438,7 +442,7 @@ class RecorderEngine:
                 return ReplayStream(gen())
 
             canonical_resp = self._deserialize_canonical_response(cassette_obj.response)
-            return adapter.from_canonical_response(canonical_resp, args)
+            return adapter.from_canonical_response(canonical_resp, args, is_parse=is_parse, **kwargs)
 
         # Mode: auto
         if self.mode == "auto":
@@ -455,7 +459,7 @@ class RecorderEngine:
                     return ReplayStream(gen())
 
                 canonical_resp = self._deserialize_canonical_response(cassette_obj.response)
-                return adapter.from_canonical_response(canonical_resp, args)
+                return adapter.from_canonical_response(canonical_resp, args, is_parse=is_parse, **kwargs)
 
         # Mode: record, or auto on cache miss
         if is_stream:
@@ -536,6 +540,7 @@ class RecorderEngine:
         make_live_call_fn: Callable[..., Any],
         *args: Any,
         is_stream: bool = False,
+        is_parse: bool = False,
         **kwargs: Any,
     ) -> Any:
         """Intercepts the async call, checking the cache according to the execution mode."""
@@ -596,7 +601,7 @@ class RecorderEngine:
                 return ReplayAsyncStream(async_gen())
 
             canonical_resp = self._deserialize_canonical_response(cassette_obj.response)
-            return adapter.from_canonical_response(canonical_resp, args)
+            return adapter.from_canonical_response(canonical_resp, args, is_parse=is_parse, **kwargs)
 
         # Mode: auto
         if self.mode == "auto":
@@ -613,7 +618,7 @@ class RecorderEngine:
                     return ReplayAsyncStream(async_gen())
 
                 canonical_resp = self._deserialize_canonical_response(cassette_obj.response)
-                return adapter.from_canonical_response(canonical_resp, args)
+                return adapter.from_canonical_response(canonical_resp, args, is_parse=is_parse, **kwargs)
 
         # Mode: record, or auto on cache miss
         if is_stream:

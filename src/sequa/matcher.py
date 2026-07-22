@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from sequa.llm.adapters.base import CanonicalRequest
-from sequa.utils import sort_dict_keys
+from sequa.utils import sort_dict_keys, serialize_type_or_pydantic
 
 
 def normalize(req: dict[str, Any] | CanonicalRequest) -> dict[str, Any]:
@@ -29,13 +29,13 @@ def normalize(req: dict[str, Any] | CanonicalRequest) -> dict[str, Any]:
             if isinstance(msg, dict):
                 # Keep only core message fields
                 normalized_msgs.append(
-                    {k: v for k, v in msg.items() if k in ("role", "content", "type", "name")}
+                    {k: serialize_type_or_pydantic(v) for k, v in msg.items() if k in ("role", "content", "type", "name")}
                 )
             elif hasattr(msg, "to_dict"):
                 try:
                     d = msg.to_dict()
                     normalized_msgs.append(
-                        {k: v for k, v in d.items() if k in ("role", "content", "type", "name")}
+                        {k: serialize_type_or_pydantic(v) for k, v in d.items() if k in ("role", "content", "type", "name")}
                     )
                 except Exception:
                     normalized_msgs.append({"content": str(msg)})
@@ -43,7 +43,7 @@ def normalize(req: dict[str, Any] | CanonicalRequest) -> dict[str, Any]:
                 try:
                     d = msg.dict()
                     normalized_msgs.append(
-                        {k: v for k, v in d.items() if k in ("role", "content", "type", "name")}
+                        {k: serialize_type_or_pydantic(v) for k, v in d.items() if k in ("role", "content", "type", "name")}
                     )
                 except Exception:
                     normalized_msgs.append({"content": str(msg)})
@@ -56,11 +56,11 @@ def normalize(req: dict[str, Any] | CanonicalRequest) -> dict[str, Any]:
     for k, v in req_dict.items():
         if v is not None:
             if k == "params" and isinstance(v, dict):
-                # Deep clean params
-                cleaned_params = {pk: pv for pk, pv in v.items() if pv is not None}
+                # Deep clean params and serialize type/pydantic classes
+                cleaned_params = {pk: serialize_type_or_pydantic(pv) for pk, pv in v.items() if pv is not None}
                 cleaned[k] = cleaned_params
             else:
-                cleaned[k] = v
+                cleaned[k] = serialize_type_or_pydantic(v)
 
     return cleaned
 

@@ -12,6 +12,8 @@ class AnthropicMonkeyPatch:
         self.original_async_create = None
         self.original_stream = None
         self.original_async_stream = None
+        self.original_parse = None
+        self.original_async_parse = None
         self.patched = False
 
     def patch(self) -> None:
@@ -88,6 +90,40 @@ class AnthropicMonkeyPatch:
                 
                 wrapped_async_stream.__llmcassette_patched__ = True
                 AsyncMessages.stream = wrapped_async_stream
+
+            # Sync Patch Parse
+            if hasattr(Messages, "parse"):
+                self.original_parse = Messages.parse
+
+                def wrapped_parse(self_obj: Messages, *args: Any, **kwargs: Any) -> Any:
+                    active_engine = get_active_engine()
+                    if active_engine is None:
+                        return self.original_parse(self_obj, *args, **kwargs)
+
+                    def make_live_call(*a: Any, **kw: Any) -> Any:
+                        return self.original_parse(self_obj, *a, **kw)
+
+                    return active_engine.handle_call(self.adapter, make_live_call, self_obj, *args, is_parse=True, **kwargs)
+
+                wrapped_parse.__llmcassette_patched__ = True
+                Messages.parse = wrapped_parse
+
+            # Async Patch Parse
+            if hasattr(AsyncMessages, "parse"):
+                self.original_async_parse = AsyncMessages.parse
+
+                async def wrapped_async_parse(self_obj: AsyncMessages, *args: Any, **kwargs: Any) -> Any:
+                    active_engine = get_active_engine()
+                    if active_engine is None:
+                        return await self.original_async_parse(self_obj, *args, **kwargs)
+
+                    async def make_live_call(*a: Any, **kw: Any) -> Any:
+                        return await self.original_async_parse(self_obj, *a, **kw)
+
+                    return await active_engine.handle_call_async(self.adapter, make_live_call, self_obj, *args, is_parse=True, **kwargs)
+
+                wrapped_async_parse.__llmcassette_patched__ = True
+                AsyncMessages.parse = wrapped_async_parse
             
             self.patched = True
         except ImportError:
@@ -107,6 +143,10 @@ class AnthropicMonkeyPatch:
                 Messages.stream = self.original_stream
             if self.original_async_stream:
                 AsyncMessages.stream = self.original_async_stream
+            if self.original_parse:
+                Messages.parse = self.original_parse
+            if self.original_async_parse:
+                AsyncMessages.parse = self.original_async_parse
             self.patched = False
         except ImportError:
             pass

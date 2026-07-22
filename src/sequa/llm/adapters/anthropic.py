@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 from sequa.llm.adapters.base import CanonicalRequest, CanonicalResponse, ProviderAdapter
+from sequa.utils import serialize_type_or_pydantic
 
 
 class AnthropicAdapter(ProviderAdapter):
@@ -28,7 +29,7 @@ class AnthropicAdapter(ProviderAdapter):
             model=model,
             temperature=temperature,
             messages=normalized_messages,
-            params=params,
+            params=serialize_type_or_pydantic(params),
             metadata={"raw_request": kwargs},
         )
 
@@ -116,12 +117,13 @@ class AnthropicAdapter(ProviderAdapter):
             }
         )
 
-    def from_canonical_response(self, response: CanonicalResponse, request: Any) -> Any:
+    def from_canonical_response(self, response: CanonicalResponse, request: Any, is_parse: bool = False, **kwargs: Any) -> Any:
         raw_resp = response.metadata.get("raw_response", {})
         resp_id = raw_resp.get("id") or "replayed-response"
         content_data = raw_resp.get("content") or []
         usage_data = response.usage or {}
 
+        replayed_msg = None
         try:
             from anthropic.types import Message, TextBlock, Usage
             
@@ -132,14 +134,12 @@ class AnthropicAdapter(ProviderAdapter):
                     type="text"
                 ))
                 
-            usage_obj = None
-            if usage_data:
-                usage_obj = Usage(
-                    input_tokens=usage_data.get("input_tokens", 0),
-                    output_tokens=usage_data.get("output_tokens", 0),
-                )
+            usage_obj = Usage(
+                input_tokens=usage_data.get("input_tokens", 0) if usage_data else 0,
+                output_tokens=usage_data.get("output_tokens", 0) if usage_data else 0,
+            )
 
-            return Message(
+            replayed_msg = Message(
                 id=resp_id,
                 content=content_blocks,
                 model=response.model or "replayed-model",
@@ -182,7 +182,7 @@ class AnthropicAdapter(ProviderAdapter):
                     usage_data.get("output_tokens") or usage_data.get("completion_tokens") or 0,
                 )
                 
-            return MockMessage(
+            replayed_msg = MockMessage(
                 id=resp_id,
                 content=content_blocks,
                 model=response.model or "replayed-model",
@@ -191,3 +191,26 @@ class AnthropicAdapter(ProviderAdapter):
                 stop_sequence=raw_resp.get("stop_sequence"),
                 usage=usage_obj,
             )
+
+        output_format = kwargs.get("output_format")
+        if is_parse or output_format:
+            try:
+                import anthropic.resources.messages.messages as mod
+                return mod.parse_response(response=replayed_msg, output_format=output_format)
+            except Exception:
+                pass
+
+            if hasattr(replayed_msg, "content") and replayed_msg.content:
+                text_block = replayed_msg.content[0]
+                parsed_val = None
+                text_val = getattr(text_block, "text", "")
+                if text_val and hasattr(output_format, "model_validate_json"):
+                    try:
+                        parsed_val = output_format.model_validate_json(text_val)
+                    except Exception:
+                        pass
+                if not hasattr(text_block, "parsed_output"):
+                    setattr(text_block, "parsed_output", parsed_val)
+
+        return replayed_msg
+
