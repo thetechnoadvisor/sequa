@@ -103,6 +103,7 @@ class cassette:
         adapter: Any | None = None,
         mask_pii: bool = False,
         guardrails: list[str] | dict[str, Any] | None = None,
+        storage: Any | None = None,
     ) -> None:
         self.path = path
         self.mode = mode
@@ -111,6 +112,7 @@ class cassette:
         self.adapter = adapter
         self.mask_pii = mask_pii
         self.guardrails = guardrails
+        self.storage = storage
 
         if self.adapter is None:
             from sequa.llm.adapters.chat import LangChainGroqAdapter
@@ -125,6 +127,7 @@ class cassette:
             normalizer=self.normalizer,
             mask_pii=self.mask_pii,
             guardrails=self.guardrails,
+            storage=self.storage,
         )
         self.original_methods: list[tuple[type, str, Any]] = []
         self.patchers: list[Any] = []

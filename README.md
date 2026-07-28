@@ -240,6 +240,43 @@ with cassette("tests/cassettes/tools_flow", mode="replay", adapter=adapter):
     print(replayed.choices[0].message.tool_calls[0].function.arguments)
 ```
 
+### 8. Flexible Storage Spaces (Memory & Disk Backends)
+
+Sequa supports modular storage backends via the `storage` parameter. You can specify string options (`"file"` or `"memory"`) or pass a `StorageBackend` instance (`FileStorage` or `MemoryStorage`).
+
+- **`storage="file"`** (Default): Stores cassettes as JSON files on disk.
+- **`storage="memory"`**: Stores cassettes in-memory without creating any files on disk — perfect for unit tests, CI pipelines, benchmarking, and quick prototyping.
+
+```python
+from sequa import cassette, MemoryStorage, FileStorage, Cassette
+
+# 1. File Storage: Store cassettes on disk as JSON files (Default)
+with cassette("tests/cassettes", storage="file"):
+    response = model.invoke("Hello file storage!")
+
+# Or using explicit FileStorage instance:
+file_storage = FileStorage(base_dir="tests/cassettes")
+with cassette(storage=file_storage):
+    response = model.invoke("Saved to disk via FileStorage")
+
+# 2. Memory Storage: Store cassettes purely in RAM (zero disk files)
+with cassette(storage="memory"):
+    response = model.invoke("Hello in-memory storage!")
+
+# Or using explicit MemoryStorage instance:
+mem = MemoryStorage()
+with cassette(storage=mem):
+    response = model.invoke("Stored in RAM memory")
+
+# 3. Programmatic Cassette object with FileStorage / MemoryStorage
+cas = Cassette(
+    request={"messages": [{"role": "user", "content": "hi"}]},
+    response={"output": "hello"},
+    storage=FileStorage(base_dir="custom_cassettes")
+)
+cas.save(path_or_id="custom_disk_key.json")
+```
+
 ---
 
 ## Command Line Interface (CLI)

@@ -264,6 +264,7 @@ class RecorderEngine:
         normalizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         mask_pii: bool = False,
         guardrails: list[str] | dict[str, Any] | None = None,
+        storage: Any | None = None,
     ) -> None:
         self.path = path
         self.mode = mode.lower()
@@ -271,6 +272,9 @@ class RecorderEngine:
         self.normalizer = normalizer
         self.mask_pii = mask_pii
         self.guardrails = guardrails
+
+        from sequa.storage import resolve_storage
+        self.storage = resolve_storage(storage, base_dir=self.path)
 
         from sequa.guardrails import NeMoGuardrailsEngine
         self.guardrails_engine = NeMoGuardrailsEngine(guardrails)
@@ -295,22 +299,26 @@ class RecorderEngine:
         if provider:
             provider_dir = provider.strip().lower()
             primary_path = os.path.join(self.path, provider_dir, f"{req_hash}.json")
-            if storage.exists(primary_path):
+            if self.storage.exists(primary_path):
                 return primary_path
 
         # 2. Check legacy path directly under self.path
         legacy_path = os.path.join(self.path, f"{req_hash}.json")
-        if storage.exists(legacy_path):
+        if self.storage.exists(legacy_path):
             return legacy_path
 
-        # 3. Check any subfolder under self.path
+        # 3. Check req_hash directly in storage
+        if self.storage.exists(req_hash):
+            return req_hash
+
+        # 4. Check any subfolder under self.path
         target_file = f"{req_hash}.json"
         if os.path.isdir(self.path):
             for root, _, files in os.walk(self.path):
                 if target_file in files:
                     return os.path.join(root, target_file)
 
-        # 4. Default saving path
+        # 5. Default saving path
         return self.get_cassette_path(req_hash, provider)
 
 
@@ -562,7 +570,7 @@ class RecorderEngine:
                     response=serialized_resp,
                     metadata={"latency_ms": 0.0, "guardrails": blocked_resp.metadata.get("guardrails")},
                 )
-                storage.save(cassette_obj, save_path, base_dir=self.path)
+                self.storage.save(cassette_obj, save_path, base_dir=self.path)
             return adapter.from_canonical_response(blocked_resp, args, is_parse=is_parse, **kwargs)
 
         # Mode: live
@@ -576,11 +584,11 @@ class RecorderEngine:
 
         # Mode: replay
         if self.mode == "replay":
-            if not storage.exists(cassette_path):
+            if not self.storage.exists(cassette_path):
                 raise CassetteNotFoundError(
                     f"Cassette not found in replay mode at path: {cassette_path}"
                 )
-            cassette_obj = storage.load(cassette_path)
+            cassette_obj = self.storage.load(cassette_path)
             
             is_stored_stream = cassette_obj.response.get("metadata", {}).get("is_stream", False)
             if is_stored_stream or is_stream:
@@ -598,8 +606,8 @@ class RecorderEngine:
 
         # Mode: auto
         if self.mode == "auto":
-            if storage.exists(cassette_path):
-                cassette_obj = storage.load(cassette_path)
+            if self.storage.exists(cassette_path):
+                cassette_obj = self.storage.load(cassette_path)
                 is_stored_stream = cassette_obj.response.get("metadata", {}).get("is_stream", False)
                 if is_stored_stream or is_stream:
                     chunks_data = cassette_obj.response.get("metadata", {}).get("chunks", [])
@@ -660,7 +668,7 @@ class RecorderEngine:
                     response=serialized_resp,
                     metadata={"latency_ms": latency, "guardrails": guardrail_meta},
                 )
-                storage.save(cassette_obj, save_path, base_dir=self.path)
+                self.storage.save(cassette_obj, save_path, base_dir=self.path)
                 
             return ReplayStream(record_gen())
 
@@ -686,7 +694,7 @@ class RecorderEngine:
             response=serialized_resp,
             metadata={"latency_ms": latency, "guardrails": guardrail_meta},
         )
-        storage.save(cassette_obj, save_path, base_dir=self.path)
+        self.storage.save(cassette_obj, save_path, base_dir=self.path)
 
         if guardrail_meta and not guardrail_meta.get("output_passed", True):
             return adapter.from_canonical_response(canonical_resp, args, is_parse=is_parse, **kwargs)
@@ -752,7 +760,7 @@ class RecorderEngine:
                     response=serialized_resp,
                     metadata={"latency_ms": 0.0, "guardrails": blocked_resp.metadata.get("guardrails")},
                 )
-                storage.save(cassette_obj, save_path, base_dir=self.path)
+                self.storage.save(cassette_obj, save_path, base_dir=self.path)
             return adapter.from_canonical_response(blocked_resp, args, is_parse=is_parse, **kwargs)
 
         # Mode: live
@@ -766,11 +774,11 @@ class RecorderEngine:
 
         # Mode: replay
         if self.mode == "replay":
-            if not storage.exists(cassette_path):
+            if not self.storage.exists(cassette_path):
                 raise CassetteNotFoundError(
                     f"Cassette not found in replay mode at path: {cassette_path}"
                 )
-            cassette_obj = storage.load(cassette_path)
+            cassette_obj = self.storage.load(cassette_path)
             
             is_stored_stream = cassette_obj.response.get("metadata", {}).get("is_stream", False)
             if is_stored_stream or is_stream:
@@ -788,8 +796,8 @@ class RecorderEngine:
 
         # Mode: auto
         if self.mode == "auto":
-            if storage.exists(cassette_path):
-                cassette_obj = storage.load(cassette_path)
+            if self.storage.exists(cassette_path):
+                cassette_obj = self.storage.load(cassette_path)
                 is_stored_stream = cassette_obj.response.get("metadata", {}).get("is_stream", False)
                 if is_stored_stream or is_stream:
                     chunks_data = cassette_obj.response.get("metadata", {}).get("chunks", [])
@@ -850,7 +858,7 @@ class RecorderEngine:
                     response=serialized_resp,
                     metadata={"latency_ms": latency, "guardrails": guardrail_meta},
                 )
-                storage.save(cassette_obj, save_path, base_dir=self.path)
+                self.storage.save(cassette_obj, save_path, base_dir=self.path)
                 
             return ReplayAsyncStream(record_async_gen())
 
@@ -876,7 +884,7 @@ class RecorderEngine:
             response=serialized_resp,
             metadata={"latency_ms": latency, "guardrails": guardrail_meta},
         )
-        storage.save(cassette_obj, save_path, base_dir=self.path)
+        self.storage.save(cassette_obj, save_path, base_dir=self.path)
 
         if guardrail_meta and not guardrail_meta.get("output_passed", True):
             return adapter.from_canonical_response(canonical_resp, args, is_parse=is_parse, **kwargs)
