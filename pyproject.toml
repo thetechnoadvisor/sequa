@@ -1,6 +1,6 @@
 [project]
 name = "sequa"
-version = "0.0.6"
+version = "0.0.7"
 description = "Snapshot Testing for LLM Applications"
 readme = "README.md"
 authors = [
