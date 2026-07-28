@@ -36,6 +36,7 @@ with cassette("tests/cassettes"):
 - **Multiple Execution Modes**: Support `replay`, `record`, `auto`, and `live` modes.
 - **Streaming Support**: Full support for recording and replaying streaming responses (both sync and async generators).
 - **PII & Sensitive Information Masking**: Automatically mask emails, phone numbers, credit cards, SSNs, IP addresses, API keys, and bearer tokens from cassettes.
+- **NVIDIA NeMo Guardrails Integration**: Apply official NVIDIA NeMo Guardrails (`nemoguardrails`) on input prompts before LLM execution and on output responses after generation. Selectable input and output guardrails.
 - **Robust Key Sorting & Hashing**: Recursively sorts request inputs to generate deterministic hashes.
 - **Custom Ignored Fields**: Easily ignore dynamic/unstable fields (e.g. `temperature`, `max_tokens`).
 - **Custom Normalizers**: Redact, replace, or clean requests prior to hashing.
@@ -163,6 +164,36 @@ with cassette("tests/cassettes", adapter=adapter):
     for chunk in stream:
         print(chunk.choices[0].delta.content or "", end="")
 ```
+
+### 6. NVIDIA NeMo Guardrails Integration
+
+Sequa integrates the official **NVIDIA NeMo Guardrails** (`nemoguardrails`) package to evaluate input prompts before sending them to the LLM and output responses after generation. Users can select which guardrails to enable via the `guardrails` parameter in `cassette()`.
+
+```python
+from langchain_groq import ChatGroq
+from sequa import cassette
+
+model = ChatGroq(model_name="llama-3.1-8b-instant")
+
+# Enable input jailbreak detection and output hallucination checking
+with cassette("tests/cassettes", guardrails=["input_jailbreak", "output_hallucination"]):
+    # 1. Input prompt is evaluated before calling LLM:
+    # If flagged as jailbreak, LLM call is blocked immediately.
+    response = model.invoke("Explain how photosynthesis works.")
+
+    # 2. Output response is evaluated after generation:
+    # If output contains hallucination, output response is blocked.
+```
+
+Available Guardrails:
+- **Input Guardrails**:
+  - `"input_jailbreak"`: Detects prompt injection, system prompt override, or DAN mode attempts.
+  - `"input_moderation"`: Detects harmful, unsafe, or dangerous input prompts.
+  - `"input_profanity"`: Filters profanity/obscenity in prompt input.
+- **Output Guardrails**:
+  - `"output_moderation"`: Detects harmful or toxic generated response text.
+  - `"output_hallucination"`: Detects ungrounded or fabricated statements ("I am making this up").
+  - `"output_profanity"`: Filters profanity in generated LLM responses.
 
 ---
 

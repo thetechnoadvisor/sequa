@@ -23,6 +23,77 @@ def get_active_engine() -> Any | None:
 
 
 class cassette:
+    """Context manager and decorator for recording and replaying LLM interactions.
+
+    Sequa intercepts LLM requests and responses, storing them in local cassette files
+    for fast, deterministic testing and replaying without external API latency or costs.
+
+    Parameters
+    ----------
+    path : str, default="cassettes"
+        The file or directory path where cassette recordings will be saved or read.
+        Can be a directory path (e.g. ``"tests/cassettes"``) or a specific file path (e.g. ``"my_test.json"``).
+    mode : {"auto", "record", "replay", "live"}, default="auto"
+        Execution mode controlling LLM playback behavior:
+        
+        * ``"auto"`` : Replays from cassette if a matching recording exists, otherwise makes a live call and records it.
+        * ``"record"`` : Always makes a live API call and records/overwrites the cassette file.
+        * ``"replay"`` : Only replays from existing cassettes. Raises ``CassetteNotFoundError`` if no match is found.
+        * ``"live"`` : Direct pass-through to live API, bypassing Sequa recording and replaying entirely.
+    ignore_fields : list of str, optional
+        List of request payload keys to exclude when hashing requests for matching.
+        Useful for dynamic or non-deterministic parameters like ``["temperature", "max_tokens", "seed"]``.
+    normalizer : callable, optional
+        A custom normalization function ``func(request_dict) -> dict`` applied to the request payload
+        prior to key-sorting and hashing.
+    adapter : BaseLLMAdapter, optional
+        An optional custom adapter instance (e.g. ``OpenAIAdapter()``, ``AnthropicAdapter()``) to parse
+        canonical requests and responses. Defaults to ``LangChainGroqAdapter()``.
+    mask_pii : bool, default=False
+        If ``True``, automatically detects and redacts sensitive PII (emails, phone numbers, credit cards, SSNs,
+        IP addresses, API keys, bearer tokens) from request and response payloads before writing them to disk.
+    guardrails : list of str or dict, optional
+        Configures NVIDIA NeMo Guardrails to evaluate input prompts and generated output responses.
+        
+        Available Input Guardrails:
+        * ``"input_jailbreak"`` / ``"jailbreak"`` : Detects prompt injections and system overrides.
+        * ``"input_moderation"`` / ``"moderation"`` : Flags harmful or unsafe input prompts.
+        * ``"input_profanity"`` / ``"profanity"`` : Filters profanity in prompt input.
+        
+        Available Output Guardrails:
+        * ``"output_moderation"`` / ``"moderation"`` : Flags toxic or harmful generated responses.
+        * ``"output_hallucination"`` / ``"hallucination"`` : Detects ungrounded or fabricated claims.
+        * ``"output_profanity"`` / ``"profanity"`` : Filters profanity in generated LLM responses.
+        
+        Use ``"all"`` to enable all available input and output guardrails.
+
+    Examples
+    --------
+    Basic Context Manager Usage:
+
+    >>> from sequa import cassette
+    >>> from langchain_groq import ChatGroq
+    >>> model = ChatGroq(model_name="llama-3.1-8b-instant")
+    >>> with cassette("tests/cassettes/example", mode="auto"):
+    ...     response = model.invoke("What is the capital of France?")
+
+    Enabling PII Masking & NeMo Guardrails:
+
+    >>> with cassette(
+    ...     path="tests/cassettes/secure_flow",
+    ...     mode="record",
+    ...     mask_pii=True,
+    ...     guardrails=["input_jailbreak", "output_hallucination"],
+    ... ):
+    ...     response = model.invoke("Explain photosynthesis")
+
+    Using as a Function Decorator:
+
+    >>> @cassette("tests/cassettes/my_test", mode="replay")
+    ... def test_my_llm_feature():
+    ...     res = model.invoke("Hello world")
+    """
+
     def __init__(
         self,
         path: str = "cassettes",
@@ -31,6 +102,7 @@ class cassette:
         normalizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         adapter: Any | None = None,
         mask_pii: bool = False,
+        guardrails: list[str] | dict[str, Any] | None = None,
     ) -> None:
         self.path = path
         self.mode = mode
@@ -38,6 +110,7 @@ class cassette:
         self.normalizer = normalizer
         self.adapter = adapter
         self.mask_pii = mask_pii
+        self.guardrails = guardrails
 
         if self.adapter is None:
             from sequa.llm.adapters.chat import LangChainGroqAdapter
@@ -51,6 +124,7 @@ class cassette:
             ignore_fields=self.ignore_fields,
             normalizer=self.normalizer,
             mask_pii=self.mask_pii,
+            guardrails=self.guardrails,
         )
         self.original_methods: list[tuple[type, str, Any]] = []
         self.patchers: list[Any] = []

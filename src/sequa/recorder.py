@@ -263,12 +263,17 @@ class RecorderEngine:
         ignore_fields: list[str] | None = None,
         normalizer: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         mask_pii: bool = False,
+        guardrails: list[str] | dict[str, Any] | None = None,
     ) -> None:
         self.path = path
         self.mode = mode.lower()
         self.ignore_fields = ignore_fields or []
         self.normalizer = normalizer
         self.mask_pii = mask_pii
+        self.guardrails = guardrails
+
+        from sequa.guardrails import NeMoGuardrailsEngine
+        self.guardrails_engine = NeMoGuardrailsEngine(guardrails)
 
         if self.mode not in ("replay", "record", "auto", "live"):
             raise ValueError(f"Invalid mode: {self.mode}. Must be replay, record, auto, or live.")
@@ -375,6 +380,117 @@ class RecorderEngine:
 
         return val
 
+    def _extract_prompt_text(self, canonical_req: CanonicalRequest, args: tuple[Any, ...]) -> str:
+        texts = []
+        if canonical_req.messages:
+            for msg in canonical_req.messages:
+                if isinstance(msg, dict):
+                    content = msg.get("content") or msg.get("text") or ""
+                    if isinstance(content, str) and content:
+                        texts.append(content)
+                elif isinstance(msg, str):
+                    texts.append(msg)
+                elif hasattr(msg, "content"):
+                    c = getattr(msg, "content", "")
+                    if isinstance(c, str) and c:
+                        texts.append(c)
+
+        if not texts and args:
+            for arg in args:
+                if isinstance(arg, str):
+                    texts.append(arg)
+                elif hasattr(arg, "content"):
+                    c = getattr(arg, "content", "")
+                    if isinstance(c, str) and c:
+                        texts.append(c)
+                elif isinstance(arg, (list, tuple)):
+                    for item in arg:
+                        if isinstance(item, str):
+                            texts.append(item)
+                        elif hasattr(item, "content"):
+                            c = getattr(item, "content", "")
+                            if isinstance(c, str) and c:
+                                texts.append(c)
+
+        return "\n".join(texts)
+
+    def _process_input_guardrails(
+        self, canonical_req: CanonicalRequest, args: tuple[Any, ...]
+    ) -> tuple[bool, dict[str, Any] | None, CanonicalResponse | None]:
+        if not hasattr(self, "guardrails_engine") or not self.guardrails_engine.is_enabled():
+            return True, None, None
+
+        prompt_text = self._extract_prompt_text(canonical_req, args)
+        input_passed, input_rails_eval, input_violations = self.guardrails_engine.evaluate_input(prompt_text)
+
+        if not input_passed:
+            first_violation = input_violations[0]
+            blocked_msg = f"[NeMo Guardrail Blocked] {first_violation['message']}"
+            guardrail_meta = {
+                "passed": False,
+                "input_passed": False,
+                "output_passed": True,
+                "input_rails_evaluated": input_rails_eval,
+                "output_rails_evaluated": [],
+                "violations": input_violations,
+                "blocked_by": first_violation["rail"],
+                "message": first_violation["message"],
+            }
+            canonical_resp = CanonicalResponse(
+                provider=canonical_req.provider,
+                output=blocked_msg,
+                model=canonical_req.model,
+                latency=0.0,
+                metadata={"guardrails": guardrail_meta},
+            )
+            return False, guardrail_meta, canonical_resp
+
+        return True, {
+            "input_passed": True,
+            "input_rails_evaluated": input_rails_eval,
+            "violations": []
+        }, None
+
+    def _process_output_guardrails(
+        self, canonical_resp: CanonicalResponse, prompt_text: str, input_meta: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        if not hasattr(self, "guardrails_engine") or not self.guardrails_engine.is_enabled():
+            return canonical_resp.metadata.get("guardrails", {})
+
+        output_text = str(canonical_resp.output or "")
+        output_passed, output_rails_eval, output_violations = self.guardrails_engine.evaluate_output(output_text, prompt_text)
+
+        input_meta = input_meta or {}
+        input_passed = input_meta.get("input_passed", True)
+        input_rails_eval = input_meta.get("input_rails_evaluated", [])
+        input_violations = input_meta.get("violations", [])
+
+        combined_violations = input_violations + output_violations
+        all_passed = input_passed and output_passed
+
+        blocked_by = None
+        message = None
+        if not input_passed:
+            blocked_by = input_violations[0]["rail"] if input_violations else None
+            message = input_violations[0]["message"] if input_violations else None
+        elif not output_passed:
+            blocked_by = output_violations[0]["rail"] if output_violations else None
+            message = output_violations[0]["message"] if output_violations else None
+            canonical_resp.output = f"[NeMo Guardrail Blocked] {output_violations[0]['message']}"
+
+        guardrail_meta = {
+            "passed": all_passed,
+            "input_passed": input_passed,
+            "output_passed": output_passed,
+            "input_rails_evaluated": input_rails_eval,
+            "output_rails_evaluated": output_rails_eval,
+            "violations": combined_violations,
+            "blocked_by": blocked_by,
+            "message": message,
+        }
+        canonical_resp.metadata["guardrails"] = guardrail_meta
+        return guardrail_meta
+
     def handle_call(
         self,
         adapter: ProviderAdapter,
@@ -419,9 +535,32 @@ class RecorderEngine:
         cassette_path = self.find_cassette_path(req_hash, canonical_req.provider)
         save_path = self.get_cassette_path(req_hash, canonical_req.provider)
 
+        prompt_text = self._extract_prompt_text(canonical_req, args)
+
+        # 3. Evaluate Input Guardrails
+        input_ok, input_meta, blocked_resp = self._process_input_guardrails(canonical_req, args)
+        if not input_ok and blocked_resp is not None:
+            if self.mode in ("record", "auto"):
+                serialized_req = self._serialize_canonical_request(canonical_req)
+                serialized_resp = self._serialize_canonical_response(blocked_resp)
+                cassette_obj = Cassette(
+                    provider=canonical_req.provider,
+                    hash=req_hash,
+                    request=serialized_req,
+                    response=serialized_resp,
+                    metadata={"latency_ms": 0.0, "guardrails": blocked_resp.metadata.get("guardrails")},
+                )
+                storage.save(cassette_obj, save_path, base_dir=self.path)
+            return adapter.from_canonical_response(blocked_resp, args, is_parse=is_parse, **kwargs)
+
         # Mode: live
         if self.mode == "live":
-            return make_live_call_fn(*args, **kwargs)
+            live_response = make_live_call_fn(*args, **kwargs)
+            canonical_resp = adapter.to_canonical_response(live_response, **kwargs)
+            guardrail_meta = self._process_output_guardrails(canonical_resp, prompt_text, input_meta)
+            if guardrail_meta and not guardrail_meta.get("output_passed", True):
+                return adapter.from_canonical_response(canonical_resp, args, is_parse=is_parse, **kwargs)
+            return live_response
 
         # Mode: replay
         if self.mode == "replay":
@@ -442,6 +581,7 @@ class RecorderEngine:
                 return ReplayStream(gen())
 
             canonical_resp = self._deserialize_canonical_response(cassette_obj.response)
+            self._process_output_guardrails(canonical_resp, prompt_text, input_meta)
             return adapter.from_canonical_response(canonical_resp, args, is_parse=is_parse, **kwargs)
 
         # Mode: auto
@@ -459,6 +599,7 @@ class RecorderEngine:
                     return ReplayStream(gen())
 
                 canonical_resp = self._deserialize_canonical_response(cassette_obj.response)
+                self._process_output_guardrails(canonical_resp, prompt_text, input_meta)
                 return adapter.from_canonical_response(canonical_resp, args, is_parse=is_parse, **kwargs)
 
         # Mode: record, or auto on cache miss
@@ -495,6 +636,7 @@ class RecorderEngine:
                         "chunks": chunks,
                     }
                 )
+                guardrail_meta = self._process_output_guardrails(canonical_resp, prompt_text, input_meta)
                 
                 serialized_req = self._serialize_canonical_request(canonical_req)
                 serialized_resp = self._serialize_canonical_response(canonical_resp)
@@ -504,7 +646,7 @@ class RecorderEngine:
                     hash=req_hash,
                     request=serialized_req,
                     response=serialized_resp,
-                    metadata={"latency_ms": latency},
+                    metadata={"latency_ms": latency, "guardrails": guardrail_meta},
                 )
                 storage.save(cassette_obj, save_path, base_dir=self.path)
                 
@@ -519,6 +661,8 @@ class RecorderEngine:
         if canonical_resp.latency is None:
             canonical_resp.latency = latency
 
+        guardrail_meta = self._process_output_guardrails(canonical_resp, prompt_text, input_meta)
+
         # Serialize request/response and save to storage
         serialized_req = self._serialize_canonical_request(canonical_req)
         serialized_resp = self._serialize_canonical_response(canonical_resp)
@@ -528,9 +672,12 @@ class RecorderEngine:
             hash=req_hash,
             request=serialized_req,
             response=serialized_resp,
-            metadata={"latency_ms": latency},
+            metadata={"latency_ms": latency, "guardrails": guardrail_meta},
         )
         storage.save(cassette_obj, save_path, base_dir=self.path)
+
+        if guardrail_meta and not guardrail_meta.get("output_passed", True):
+            return adapter.from_canonical_response(canonical_resp, args, is_parse=is_parse, **kwargs)
 
         return live_response
 
@@ -578,9 +725,32 @@ class RecorderEngine:
         cassette_path = self.find_cassette_path(req_hash, canonical_req.provider)
         save_path = self.get_cassette_path(req_hash, canonical_req.provider)
 
+        prompt_text = self._extract_prompt_text(canonical_req, args)
+
+        # 3. Evaluate Input Guardrails
+        input_ok, input_meta, blocked_resp = self._process_input_guardrails(canonical_req, args)
+        if not input_ok and blocked_resp is not None:
+            if self.mode in ("record", "auto"):
+                serialized_req = self._serialize_canonical_request(canonical_req)
+                serialized_resp = self._serialize_canonical_response(blocked_resp)
+                cassette_obj = Cassette(
+                    provider=canonical_req.provider,
+                    hash=req_hash,
+                    request=serialized_req,
+                    response=serialized_resp,
+                    metadata={"latency_ms": 0.0, "guardrails": blocked_resp.metadata.get("guardrails")},
+                )
+                storage.save(cassette_obj, save_path, base_dir=self.path)
+            return adapter.from_canonical_response(blocked_resp, args, is_parse=is_parse, **kwargs)
+
         # Mode: live
         if self.mode == "live":
-            return await make_live_call_fn(*args, **kwargs)
+            live_response = await make_live_call_fn(*args, **kwargs)
+            canonical_resp = adapter.to_canonical_response(live_response, **kwargs)
+            guardrail_meta = self._process_output_guardrails(canonical_resp, prompt_text, input_meta)
+            if guardrail_meta and not guardrail_meta.get("output_passed", True):
+                return adapter.from_canonical_response(canonical_resp, args, is_parse=is_parse, **kwargs)
+            return live_response
 
         # Mode: replay
         if self.mode == "replay":
@@ -601,6 +771,7 @@ class RecorderEngine:
                 return ReplayAsyncStream(async_gen())
 
             canonical_resp = self._deserialize_canonical_response(cassette_obj.response)
+            self._process_output_guardrails(canonical_resp, prompt_text, input_meta)
             return adapter.from_canonical_response(canonical_resp, args, is_parse=is_parse, **kwargs)
 
         # Mode: auto
@@ -618,6 +789,7 @@ class RecorderEngine:
                     return ReplayAsyncStream(async_gen())
 
                 canonical_resp = self._deserialize_canonical_response(cassette_obj.response)
+                self._process_output_guardrails(canonical_resp, prompt_text, input_meta)
                 return adapter.from_canonical_response(canonical_resp, args, is_parse=is_parse, **kwargs)
 
         # Mode: record, or auto on cache miss
@@ -654,6 +826,7 @@ class RecorderEngine:
                         "chunks": chunks,
                     }
                 )
+                guardrail_meta = self._process_output_guardrails(canonical_resp, prompt_text, input_meta)
                 
                 serialized_req = self._serialize_canonical_request(canonical_req)
                 serialized_resp = self._serialize_canonical_response(canonical_resp)
@@ -663,7 +836,7 @@ class RecorderEngine:
                     hash=req_hash,
                     request=serialized_req,
                     response=serialized_resp,
-                    metadata={"latency_ms": latency},
+                    metadata={"latency_ms": latency, "guardrails": guardrail_meta},
                 )
                 storage.save(cassette_obj, save_path, base_dir=self.path)
                 
@@ -678,6 +851,8 @@ class RecorderEngine:
         if canonical_resp.latency is None:
             canonical_resp.latency = latency
 
+        guardrail_meta = self._process_output_guardrails(canonical_resp, prompt_text, input_meta)
+
         # Serialize request/response and save to storage
         serialized_req = self._serialize_canonical_request(canonical_req)
         serialized_resp = self._serialize_canonical_response(canonical_resp)
@@ -687,9 +862,12 @@ class RecorderEngine:
             hash=req_hash,
             request=serialized_req,
             response=serialized_resp,
-            metadata={"latency_ms": latency},
+            metadata={"latency_ms": latency, "guardrails": guardrail_meta},
         )
         storage.save(cassette_obj, save_path, base_dir=self.path)
+
+        if guardrail_meta and not guardrail_meta.get("output_passed", True):
+            return adapter.from_canonical_response(canonical_resp, args, is_parse=is_parse, **kwargs)
 
         return live_response
 

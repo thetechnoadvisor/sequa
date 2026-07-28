@@ -1,6 +1,6 @@
 [project]
 name = "sequa"
-version = "0.0.5"
+version = "0.0.6"
 description = "Snapshot Testing for LLM Applications"
 readme = "README.md"
 authors = [
@@ -13,6 +13,7 @@ dependencies = [
     "langchain-groq>=0.3.0",
     "openai>=1.0.0",
     "anthropic>=0.18.0",
+    "nemoguardrails>=0.23.0",
 ]
 
 [project.scripts]
