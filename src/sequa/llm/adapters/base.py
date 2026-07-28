@@ -41,7 +41,13 @@ class ProviderAdapter(ABC):
         """Convert a provider-specific response into the canonical response shape."""
 
     @abstractmethod
-    def from_canonical_response(self, response: CanonicalResponse, request: Any) -> Any:
+    def from_canonical_response(
+        self,
+        response: CanonicalResponse,
+        request: Any,
+        is_parse: bool = False,
+        **kwargs: Any,
+    ) -> Any:
         """Rebuild a provider-native response from a canonical response."""
 
 

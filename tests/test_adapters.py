@@ -108,3 +108,25 @@ def test_double_patching_does_not_nest():
     assert isinstance(result["raw"], dict)
     assert "choices" in result["raw"]
     assert "raw" not in result["raw"]
+
+
+def test_provider_adapter_from_canonical_response_accepts_is_parse_and_kwargs():
+    from sequa.llm.adapters import ProviderAdapter, CanonicalRequest, CanonicalResponse
+
+    class CustomAdapter(ProviderAdapter):
+        provider_name = "custom"
+
+        def to_canonical_request(self, request, **kwargs):
+            return CanonicalRequest(provider="custom", model="m", messages=[])
+
+        def to_canonical_response(self, response, **kwargs):
+            return CanonicalResponse(provider="custom", model="m", output="ok")
+
+        def from_canonical_response(self, response, request, is_parse=False, **kwargs):
+            return {"output": response.output, "is_parse": is_parse, "extra": kwargs.get("extra")}
+
+    adapter = CustomAdapter()
+    resp = CanonicalResponse(provider="custom", model="m", output="hello")
+    res = adapter.from_canonical_response(resp, {}, is_parse=True, extra="val")
+    assert res == {"output": "hello", "is_parse": True, "extra": "val"}
+
