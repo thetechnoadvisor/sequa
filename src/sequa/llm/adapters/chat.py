@@ -84,11 +84,13 @@ class LangChainGroqAdapter(ProviderAdapter):
         choices = payload.get("choices", [])
         first_choice = choices[0] if choices else {}
         message = first_choice.get("message", {})
+        tool_calls = message.get("tool_calls") or payload.get("tool_calls") or []
 
         return CanonicalResponse(
             provider=self.provider_name,
             model=kwargs.get("model"),
             output=message.get("content"),
+            tool_calls=serialize_type_or_pydantic(tool_calls),
             usage=payload.get("usage"),
             metadata={"raw_response": payload},
         )
@@ -157,14 +159,18 @@ class LangChainGroqAdapter(ProviderAdapter):
 
             return AIMessage(**aimsg_kwargs)
 
+        msg_dict: dict[str, Any] = {
+            "role": "assistant",
+            "content": response.output,
+        }
+        if response.tool_calls:
+            msg_dict["tool_calls"] = response.tool_calls
+
         payload: dict[str, Any] = {
             "id": resp_id,
             "choices": [
                 {
-                    "message": {
-                        "role": "assistant",
-                        "content": response.output,
-                    },
+                    "message": msg_dict,
                     "finish_reason": finish_reason,
                 }
             ],
@@ -205,11 +211,37 @@ class OpenAIAdapter(ProviderAdapter):
         normalized_messages = []
         for msg in messages:
             if isinstance(msg, dict):
-                normalized_messages.append({"role": msg.get("role"), "content": msg.get("content")})
+                msg_dict: dict[str, Any] = {"role": msg.get("role")}
+                if "content" in msg:
+                    msg_dict["content"] = msg.get("content")
+                if "tool_calls" in msg:
+                    msg_dict["tool_calls"] = serialize_type_or_pydantic(msg.get("tool_calls"))
+                if "tool_call_id" in msg:
+                    msg_dict["tool_call_id"] = msg.get("tool_call_id")
+                if "name" in msg:
+                    msg_dict["name"] = msg.get("name")
+                if "function_call" in msg:
+                    msg_dict["function_call"] = serialize_type_or_pydantic(msg.get("function_call"))
+                normalized_messages.append(msg_dict)
             else:
                 role = getattr(msg, "role", "user")
-                content = getattr(msg, "content", "")
-                normalized_messages.append({"role": role, "content": content})
+                content = getattr(msg, "content", None)
+                msg_dict = {"role": role}
+                if content is not None:
+                    msg_dict["content"] = content
+                tc = getattr(msg, "tool_calls", None)
+                if tc is not None:
+                    msg_dict["tool_calls"] = serialize_type_or_pydantic(tc)
+                tcid = getattr(msg, "tool_call_id", None)
+                if tcid is not None:
+                    msg_dict["tool_call_id"] = tcid
+                name = getattr(msg, "name", None)
+                if name is not None:
+                    msg_dict["name"] = name
+                fc = getattr(msg, "function_call", None)
+                if fc is not None:
+                    msg_dict["function_call"] = serialize_type_or_pydantic(fc)
+                normalized_messages.append(msg_dict)
 
         return CanonicalRequest(
             provider=self.provider_name,
@@ -254,26 +286,42 @@ class OpenAIAdapter(ProviderAdapter):
                     output = getattr(message_obj, "content", None)
                     tool_calls = getattr(message_obj, "tool_calls", None) or []
 
+        serialized_tool_calls = serialize_type_or_pydantic(tool_calls)
+        if not isinstance(serialized_tool_calls, list):
+            serialized_tool_calls = [serialized_tool_calls] if serialized_tool_calls else []
+
         # Convert choices list to serializable dictionary format
         choices_serializable = []
         for c in choices:
             if isinstance(c, dict):
                 msg = c.get("message") or {}
+                msg_dict: dict[str, Any] = {
+                    "role": msg.get("role", "assistant"),
+                    "content": msg.get("content"),
+                }
+                if "tool_calls" in msg and msg["tool_calls"]:
+                    msg_dict["tool_calls"] = serialize_type_or_pydantic(msg["tool_calls"])
+                if "function_call" in msg and msg["function_call"]:
+                    msg_dict["function_call"] = serialize_type_or_pydantic(msg["function_call"])
                 choices_serializable.append({
                     "finish_reason": c.get("finish_reason", "stop"),
-                    "message": {
-                        "role": msg.get("role", "assistant"),
-                        "content": msg.get("content", ""),
-                    }
+                    "message": msg_dict,
                 })
             else:
                 msg_obj = getattr(c, "message", None)
+                tc = getattr(msg_obj, "tool_calls", None) if msg_obj else None
+                fc = getattr(msg_obj, "function_call", None) if msg_obj else None
+                msg_dict = {
+                    "role": getattr(msg_obj, "role", "assistant") if msg_obj else "assistant",
+                    "content": getattr(msg_obj, "content", None) if msg_obj else None,
+                }
+                if tc:
+                    msg_dict["tool_calls"] = serialize_type_or_pydantic(tc)
+                if fc:
+                    msg_dict["function_call"] = serialize_type_or_pydantic(fc)
                 choices_serializable.append({
                     "finish_reason": getattr(c, "finish_reason", "stop"),
-                    "message": {
-                        "role": getattr(msg_obj, "role", "assistant") if msg_obj else "assistant",
-                        "content": getattr(msg_obj, "content", "") if msg_obj else "",
-                    }
+                    "message": msg_dict,
                 })
 
         return CanonicalResponse(
@@ -281,7 +329,7 @@ class OpenAIAdapter(ProviderAdapter):
             model=model,
             output=output,
             usage=usage,
-            tool_calls=list(tool_calls),
+            tool_calls=serialized_tool_calls,
             metadata={
                 "raw_response": {
                     "id": resp_id,
@@ -299,13 +347,24 @@ class OpenAIAdapter(ProviderAdapter):
         choices_list = []
         for i, choice in enumerate(choices_data):
             msg_data = choice.get("message", {})
+            msg_dict = {
+                "role": msg_data.get("role", "assistant"),
+                "content": msg_data.get("content", response.output),
+            }
+            tool_calls_val = msg_data.get("tool_calls") or response.tool_calls
+            if tool_calls_val:
+                msg_dict["tool_calls"] = tool_calls_val
+            if msg_data.get("function_call"):
+                msg_dict["function_call"] = msg_data["function_call"]
+
+            finish_reason = choice.get("finish_reason")
+            if not finish_reason:
+                finish_reason = "tool_calls" if tool_calls_val else "stop"
+
             choices_list.append({
                 "index": i,
-                "finish_reason": choice.get("finish_reason", "stop"),
-                "message": {
-                    "role": msg_data.get("role", "assistant"),
-                    "content": msg_data.get("content", response.output),
-                }
+                "finish_reason": finish_reason,
+                "message": msg_dict,
             })
             
         usage_data = response.usage or {}
@@ -314,17 +373,40 @@ class OpenAIAdapter(ProviderAdapter):
         try:
             from openai.types.chat import ChatCompletion
             from openai.types.chat.chat_completion import Choice, ChoiceMessage
+            from openai.types.chat.chat_completion_message_tool_call import ChatCompletionMessageToolCall, Function
             from openai.types import CompletionUsage
+            import json
             
             choices = []
             for item in choices_list:
                 msg = item["message"]
+                tc_objs = None
+                if msg.get("tool_calls"):
+                    tc_objs = []
+                    for tc in msg["tool_calls"]:
+                        if isinstance(tc, dict):
+                            fn_data = tc.get("function", {})
+                            args_val = fn_data.get("arguments", "")
+                            if not isinstance(args_val, str):
+                                args_val = json.dumps(args_val)
+                            tc_objs.append(ChatCompletionMessageToolCall(
+                                id=tc.get("id", "call_default"),
+                                function=Function(
+                                    name=fn_data.get("name", ""),
+                                    arguments=args_val
+                                ),
+                                type=tc.get("type", "function")
+                            ))
+                        else:
+                            tc_objs.append(tc)
+
                 choices.append(Choice(
                     finish_reason=item["finish_reason"],
                     index=item["index"],
                     message=ChoiceMessage(
                         content=msg["content"],
                         role=msg["role"],
+                        tool_calls=tc_objs
                     )
                 ))
             
@@ -344,11 +426,23 @@ class OpenAIAdapter(ProviderAdapter):
                 object="chat.completion",
                 usage=usage,
             )
-        except ImportError:
+        except Exception:
+            class MockFunction:
+                def __init__(self, name: str, arguments: str):
+                    self.name = name
+                    self.arguments = arguments
+
+            class MockToolCall:
+                def __init__(self, id: str, function: MockFunction, type: str = "function"):
+                    self.id = id
+                    self.function = function
+                    self.type = type
+
             class MockMessage:
-                def __init__(self, role: str, content: str):
+                def __init__(self, role: str, content: str | None, tool_calls: list[Any] | None = None):
                     self.role = role
                     self.content = content
+                    self.tool_calls = tool_calls
                     
             class MockChoice:
                 def __init__(self, index: int, finish_reason: str, message: MockMessage):
@@ -373,10 +467,32 @@ class OpenAIAdapter(ProviderAdapter):
             choices = []
             for item in choices_list:
                 msg = item["message"]
+                tc_data = msg.get("tool_calls")
+                tc_objs = None
+                if tc_data:
+                    tc_objs = []
+                    for tc in tc_data:
+                        if isinstance(tc, dict):
+                            fn_data = tc.get("function", {})
+                            args_val = fn_data.get("arguments", "")
+                            if not isinstance(args_val, str):
+                                import json
+                                args_val = json.dumps(args_val)
+                            tc_objs.append(MockToolCall(
+                                id=tc.get("id", "call_default"),
+                                function=MockFunction(
+                                    name=fn_data.get("name", ""),
+                                    arguments=args_val,
+                                ),
+                                type=tc.get("type", "function"),
+                            ))
+                        else:
+                            tc_objs.append(tc)
+
                 choices.append(MockChoice(
                     index=item["index"],
                     finish_reason=item["finish_reason"],
-                    message=MockMessage(role=msg["role"], content=msg["content"])
+                    message=MockMessage(role=msg["role"], content=msg["content"], tool_calls=tc_objs)
                 ))
                 
             usage = None

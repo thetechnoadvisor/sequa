@@ -34,6 +34,7 @@ with cassette("tests/cassettes"):
 
 - **Record once, replay forever**: Speed up integration test suites from minutes to milliseconds.
 - **Multiple Execution Modes**: Support `replay`, `record`, `auto`, and `live` modes.
+- **Tool Calling & Function Calling**: Full support for recording, hashing, and replaying tool calls across OpenAI, Anthropic, and LangChain models. Tool definitions, tool call requests, and tool call responses are stored deterministically in cassettes and reconstructed upon playback.
 - **Streaming Support**: Full support for recording and replaying streaming responses (both sync and async generators).
 - **PII & Sensitive Information Masking**: Automatically mask emails, phone numbers, credit cards, SSNs, IP addresses, API keys, and bearer tokens from cassettes.
 - **NVIDIA NeMo Guardrails Integration**: Apply official NVIDIA NeMo Guardrails (`nemoguardrails`) on input prompts before LLM execution and on output responses after generation. Selectable input and output guardrails.
@@ -194,6 +195,50 @@ Available Guardrails:
   - `"output_moderation"`: Detects harmful or toxic generated response text.
   - `"output_hallucination"`: Detects ungrounded or fabricated statements ("I am making this up").
   - `"output_profanity"`: Filters profanity in generated LLM responses.
+
+### 7. Tool Calling & Function Calling
+
+Sequa captures tool call definitions (`tools`, `tool_choice`), tool call outputs (`tool_calls`, `function_call`), and tool call response histories across OpenAI, Anthropic, and LangChain models.
+
+```python
+from openai import OpenAI
+from sequa import cassette
+from sequa.llm.adapters import OpenAIAdapter
+
+client = OpenAI()
+adapter = OpenAIAdapter()
+
+tools = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get location weather",
+        "parameters": {
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"]
+        }
+    }
+}]
+
+# 1. Record tool call interaction
+with cassette("tests/cassettes/tools_flow", mode="record", adapter=adapter):
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
+        tools=tools
+    )
+    # Output tool call: response.choices[0].message.tool_calls[0].function.name -> "get_weather"
+
+# 2. Replay instantly from cassette
+with cassette("tests/cassettes/tools_flow", mode="replay", adapter=adapter):
+    replayed = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
+        tools=tools
+    )
+    print(replayed.choices[0].message.tool_calls[0].function.arguments)
+```
 
 ---
 

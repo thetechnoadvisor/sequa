@@ -23,27 +23,36 @@ def normalize(req: dict[str, Any] | CanonicalRequest) -> dict[str, Any]:
 
     # Normalize messages list to standard role/content/type structure
     messages = req_dict.get("messages")
+    allowed_msg_keys = (
+        "role",
+        "content",
+        "type",
+        "name",
+        "tool_calls",
+        "invalid_tool_calls",
+        "tool_call_id",
+        "function_call",
+        "args",
+        "input",
+    )
     if messages is not None:
         normalized_msgs = []
         for msg in messages:
             if isinstance(msg, dict):
-                # Keep only core message fields
+                # Keep core message fields including tool call data
                 normalized_msgs.append(
-                    {k: serialize_type_or_pydantic(v) for k, v in msg.items() if k in ("role", "content", "type", "name")}
+                    {k: serialize_type_or_pydantic(v) for k, v in msg.items() if k in allowed_msg_keys}
                 )
-            elif hasattr(msg, "to_dict"):
+            elif hasattr(msg, "model_dump") or hasattr(msg, "to_dict") or hasattr(msg, "dict"):
                 try:
-                    d = msg.to_dict()
+                    if hasattr(msg, "model_dump"):
+                        d = msg.model_dump()
+                    elif hasattr(msg, "to_dict"):
+                        d = msg.to_dict()
+                    else:
+                        d = msg.dict()
                     normalized_msgs.append(
-                        {k: serialize_type_or_pydantic(v) for k, v in d.items() if k in ("role", "content", "type", "name")}
-                    )
-                except Exception:
-                    normalized_msgs.append({"content": str(msg)})
-            elif hasattr(msg, "dict"):
-                try:
-                    d = msg.dict()
-                    normalized_msgs.append(
-                        {k: serialize_type_or_pydantic(v) for k, v in d.items() if k in ("role", "content", "type", "name")}
+                        {k: serialize_type_or_pydantic(v) for k, v in d.items() if k in allowed_msg_keys}
                     )
                 except Exception:
                     normalized_msgs.append({"content": str(msg)})

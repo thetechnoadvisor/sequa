@@ -18,11 +18,12 @@ class AnthropicAdapter(ProviderAdapter):
         normalized_messages = []
         for msg in messages:
             if isinstance(msg, dict):
-                normalized_messages.append({"role": msg.get("role"), "content": msg.get("content")})
+                content_val = serialize_type_or_pydantic(msg.get("content"))
+                normalized_messages.append({"role": msg.get("role"), "content": content_val})
             else:
                 role = getattr(msg, "role", "user")
                 content = getattr(msg, "content", "")
-                normalized_messages.append({"role": role, "content": content})
+                normalized_messages.append({"role": role, "content": serialize_type_or_pydantic(content)})
 
         return CanonicalRequest(
             provider=self.provider_name,
@@ -42,15 +43,6 @@ class AnthropicAdapter(ProviderAdapter):
             stop_reason = response.get("stop_reason")
             stop_sequence = response.get("stop_sequence")
             raw_content = response.get("content") or []
-            
-            # Extract content string
-            content_text = ""
-            for item in raw_content:
-                if isinstance(item, dict):
-                    if item.get("type") == "text":
-                        content_text += item.get("text", "")
-                else:
-                    content_text += getattr(item, "text", "")
 
             # Extract usage
             raw_usage = response.get("usage") or {}
@@ -66,10 +58,6 @@ class AnthropicAdapter(ProviderAdapter):
             stop_reason = getattr(response, "stop_reason", None)
             stop_sequence = getattr(response, "stop_sequence", None)
             raw_content = getattr(response, "content", [])
-            
-            content_text = ""
-            for item in raw_content:
-                content_text += getattr(item, "text", "")
 
             usage_obj = getattr(response, "usage", None)
             usage = None
@@ -79,31 +67,83 @@ class AnthropicAdapter(ProviderAdapter):
                     "output_tokens": getattr(usage_obj, "output_tokens", 0),
                 }
 
-        # Format content block list for serialization
+        content_text = ""
+        tool_calls = []
         content_serializable = []
+
         if isinstance(raw_content, list):
             for item in raw_content:
                 if isinstance(item, dict):
-                    content_serializable.append({
-                        "type": item.get("type", "text"),
-                        "text": item.get("text", ""),
-                    })
+                    b_type = item.get("type", "text")
+                    if b_type == "text":
+                        text_val = item.get("text", "")
+                        content_text += text_val
+                        content_serializable.append({
+                            "type": "text",
+                            "text": text_val,
+                        })
+                    elif b_type == "tool_use":
+                        tc_info = {
+                            "type": "tool_use",
+                            "id": item.get("id"),
+                            "name": item.get("name"),
+                            "input": item.get("input", {}),
+                            "args": item.get("input", {}),
+                        }
+                        tool_calls.append(tc_info)
+                        content_serializable.append({
+                            "type": "tool_use",
+                            "id": item.get("id"),
+                            "name": item.get("name"),
+                            "input": item.get("input", {}),
+                        })
+                    else:
+                        content_serializable.append(serialize_type_or_pydantic(item))
                 else:
-                    content_serializable.append({
-                        "type": getattr(item, "type", "text"),
-                        "text": getattr(item, "text", ""),
-                    })
+                    b_type = getattr(item, "type", "text")
+                    if b_type == "text":
+                        text_val = getattr(item, "text", "")
+                        content_text += text_val
+                        content_serializable.append({
+                            "type": "text",
+                            "text": text_val,
+                        })
+                    elif b_type == "tool_use":
+                        item_id = getattr(item, "id", None)
+                        item_name = getattr(item, "name", None)
+                        item_input = getattr(item, "input", {})
+                        tc_info = {
+                            "type": "tool_use",
+                            "id": item_id,
+                            "name": item_name,
+                            "input": item_input,
+                            "args": item_input,
+                        }
+                        tool_calls.append(tc_info)
+                        content_serializable.append({
+                            "type": "tool_use",
+                            "id": item_id,
+                            "name": item_name,
+                            "input": item_input,
+                        })
+                    else:
+                        content_serializable.append(serialize_type_or_pydantic(item))
         else:
+            content_text = str(raw_content or "")
             content_serializable.append({
                 "type": "text",
                 "text": content_text,
             })
+
+        if tool_calls and not stop_reason:
+            stop_reason = "tool_use"
 
         return CanonicalResponse(
             provider=self.provider_name,
             model=model,
             output=content_text,
             usage=usage,
+            tool_calls=tool_calls,
             metadata={
                 "raw_response": {
                     "id": resp_id,
@@ -125,35 +165,63 @@ class AnthropicAdapter(ProviderAdapter):
 
         replayed_msg = None
         try:
-            from anthropic.types import Message, TextBlock, Usage
+            from anthropic.types import Message, TextBlock, ToolUseBlock, Usage
             
             content_blocks = []
             for item in content_data:
-                content_blocks.append(TextBlock(
-                    text=item.get("text", response.output or ""),
-                    type="text"
-                ))
+                if isinstance(item, dict):
+                    b_type = item.get("type", "text")
+                    if b_type == "text":
+                        content_blocks.append(TextBlock(
+                            text=item.get("text", response.output or ""),
+                            type="text"
+                        ))
+                    elif b_type == "tool_use":
+                        content_blocks.append(ToolUseBlock(
+                            id=item.get("id", "toolu_default"),
+                            name=item.get("name", ""),
+                            input=item.get("input", {}),
+                            type="tool_use"
+                        ))
+                    else:
+                        content_blocks.append(TextBlock(
+                            text=str(item),
+                            type="text"
+                        ))
+                else:
+                    content_blocks.append(item)
                 
             usage_obj = Usage(
                 input_tokens=usage_data.get("input_tokens", 0) if usage_data else 0,
                 output_tokens=usage_data.get("output_tokens", 0) if usage_data else 0,
             )
 
+            stop_reason = raw_resp.get("stop_reason")
+            if not stop_reason:
+                stop_reason = "tool_use" if response.tool_calls else "end_turn"
+
             replayed_msg = Message(
                 id=resp_id,
                 content=content_blocks,
                 model=response.model or "replayed-model",
                 role=raw_resp.get("role", "assistant"),
-                stop_reason=raw_resp.get("stop_reason", "end_turn"),
+                stop_reason=stop_reason,
                 stop_sequence=raw_resp.get("stop_sequence"),
                 type="message",
                 usage=usage_obj,
             )
-        except ImportError:
+        except Exception:
             class MockTextBlock:
                 def __init__(self, text: str):
                     self.text = text
                     self.type = "text"
+
+            class MockToolUseBlock:
+                def __init__(self, id: str, name: str, input: dict[str, Any]):
+                    self.id = id
+                    self.name = name
+                    self.input = input
+                    self.type = "tool_use"
                     
             class MockUsage:
                 def __init__(self, input_t: int, output_t: int):
@@ -161,7 +229,7 @@ class AnthropicAdapter(ProviderAdapter):
                     self.output_tokens = output_t
                     
             class MockMessage:
-                def __init__(self, id: str, content: list[MockTextBlock], model: str, role: str, stop_reason: str, stop_sequence: str | None, usage: MockUsage | None):
+                def __init__(self, id: str, content: list[Any], model: str, role: str, stop_reason: str, stop_sequence: str | None, usage: MockUsage | None):
                     self.id = id
                     self.content = content
                     self.model = model
@@ -173,7 +241,20 @@ class AnthropicAdapter(ProviderAdapter):
                     
             content_blocks = []
             for item in content_data:
-                content_blocks.append(MockTextBlock(text=item.get("text", response.output or "")))
+                if isinstance(item, dict):
+                    b_type = item.get("type", "text")
+                    if b_type == "text":
+                        content_blocks.append(MockTextBlock(text=item.get("text", response.output or "")))
+                    elif b_type == "tool_use":
+                        content_blocks.append(MockToolUseBlock(
+                            id=item.get("id", "toolu_default"),
+                            name=item.get("name", ""),
+                            input=item.get("input", {}),
+                        ))
+                    else:
+                        content_blocks.append(MockTextBlock(text=str(item)))
+                else:
+                    content_blocks.append(item)
                 
             usage_obj = None
             if usage_data:
@@ -182,12 +263,16 @@ class AnthropicAdapter(ProviderAdapter):
                     usage_data.get("output_tokens") or usage_data.get("completion_tokens") or 0,
                 )
                 
+            stop_reason = raw_resp.get("stop_reason")
+            if not stop_reason:
+                stop_reason = "tool_use" if response.tool_calls else "end_turn"
+
             replayed_msg = MockMessage(
                 id=resp_id,
                 content=content_blocks,
                 model=response.model or "replayed-model",
                 role=raw_resp.get("role", "assistant"),
-                stop_reason=raw_resp.get("stop_reason", "end_turn"),
+                stop_reason=stop_reason,
                 stop_sequence=raw_resp.get("stop_sequence"),
                 usage=usage_obj,
             )

@@ -388,12 +388,24 @@ class RecorderEngine:
                     content = msg.get("content") or msg.get("text") or ""
                     if isinstance(content, str) and content:
                         texts.append(content)
+                    elif isinstance(content, (list, tuple)):
+                        for item in content:
+                            if isinstance(item, dict) and item.get("text"):
+                                texts.append(item["text"])
+                            elif hasattr(item, "text") and getattr(item, "text", None):
+                                texts.append(getattr(item, "text"))
                 elif isinstance(msg, str):
                     texts.append(msg)
                 elif hasattr(msg, "content"):
                     c = getattr(msg, "content", "")
                     if isinstance(c, str) and c:
                         texts.append(c)
+                    elif isinstance(c, (list, tuple)):
+                        for item in c:
+                            if isinstance(item, dict) and item.get("text"):
+                                texts.append(item["text"])
+                            elif hasattr(item, "text") and getattr(item, "text", None):
+                                texts.append(getattr(item, "text"))
 
         if not texts and args:
             for arg in args:
