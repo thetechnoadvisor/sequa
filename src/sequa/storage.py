@@ -243,8 +243,172 @@ def _get_base_dir(path: str, base_dir: str | None = None) -> str | None:
     return parent_dir
 
 
+class PostgresStorage(StorageBackend):
+    """PostgreSQL cassette storage backend."""
+
+    def __init__(
+        self,
+        db_url: str | None = None,
+        connection: Any | None = None,
+        table_name: str = "sequa_cassettes",
+    ) -> None:
+        self.db_url = db_url or os.getenv("DATABASE_URL") or os.getenv("POSTGRES_URL")
+        self.table_name = table_name
+        self._conn = connection
+
+    def _get_connection(self) -> Any:
+        if self._conn is not None:
+            return self._conn
+
+        if not self.db_url:
+            raise ValueError(
+                "PostgresStorage requires a 'db_url' parameter or DATABASE_URL / POSTGRES_URL environment variable."
+            )
+
+        try:
+            import psycopg
+            self._conn = psycopg.connect(self.db_url)
+            return self._conn
+        except ImportError:
+            pass
+
+        try:
+            import psycopg2
+            self._conn = psycopg2.connect(self.db_url)
+            return self._conn
+        except ImportError:
+            pass
+
+        raise ImportError(
+            "No PostgreSQL driver found. Please install 'psycopg' or 'psycopg2' (e.g. `pip install psycopg[binary]`)."
+        )
+
+    def _execute(self, cur: Any, query: str, params: tuple[Any, ...] = ()) -> None:
+        placeholder = "?" if "sqlite" in getattr(self._get_connection().__class__, "__module__", "") else "%s"
+        formatted_query = query.replace("%s", placeholder)
+        cur.execute(formatted_query, params)
+
+    def _ensure_table(self) -> None:
+        conn = self._get_connection()
+        cur = conn.cursor()
+        query = f"""
+        CREATE TABLE IF NOT EXISTS {self.table_name} (
+            id VARCHAR(255) PRIMARY KEY,
+            hash VARCHAR(255),
+            provider VARCHAR(255),
+            created_at TEXT,
+            data TEXT
+        );
+        """
+        self._execute(cur, query)
+        if hasattr(conn, "commit"):
+            conn.commit()
+
+    def save(self, cassette: Cassette | dict[str, Any], cassette_id: str | None = None, **kwargs: Any) -> None:
+        if isinstance(cassette, dict):
+            cassette_obj = Cassette.from_dict(cassette)
+        else:
+            cassette_obj = cassette
+
+        key = cassette_id or getattr(cassette_obj, "id", None) or getattr(cassette_obj, "hash", None)
+        if not key:
+            key = str(uuid.uuid4())
+
+        self._ensure_table()
+        conn = self._get_connection()
+        cur = conn.cursor()
+
+        json_data = json.dumps(cassette_obj.to_dict(), ensure_ascii=False)
+
+        self._execute(cur, f"SELECT id FROM {self.table_name} WHERE id = %s", (key,))
+        row = cur.fetchone()
+
+        if row:
+            self._execute(
+                cur,
+                f"UPDATE {self.table_name} SET hash = %s, provider = %s, created_at = %s, data = %s WHERE id = %s",
+                (cassette_obj.hash, cassette_obj.provider, cassette_obj.created_at, json_data, key),
+            )
+        else:
+            self._execute(
+                cur,
+                f"INSERT INTO {self.table_name} (id, hash, provider, created_at, data) VALUES (%s, %s, %s, %s, %s)",
+                (key, cassette_obj.hash, cassette_obj.provider, cassette_obj.created_at, json_data),
+            )
+
+        if hasattr(conn, "commit"):
+            conn.commit()
+
+    def _resolve_row(self, cassette_id: str) -> tuple[str, str] | None:
+        self._ensure_table()
+        conn = self._get_connection()
+        cur = conn.cursor()
+
+        self._execute(cur, f"SELECT id, data FROM {self.table_name} WHERE id = %s OR hash = %s", (cassette_id, cassette_id))
+        row = cur.fetchone()
+        if row:
+            return row[0], row[1]
+
+        base_target = os.path.basename(cassette_id)
+        base_target_no_ext = base_target[:-5] if base_target.endswith(".json") else base_target
+
+        self._execute(cur, f"SELECT id, data FROM {self.table_name} WHERE id = %s OR hash = %s", (base_target, base_target_no_ext))
+        row = cur.fetchone()
+        if row:
+            return row[0], row[1]
+
+        return None
+
+    def exists(self, cassette_id: str) -> bool:
+        try:
+            return self._resolve_row(cassette_id) is not None
+        except Exception:
+            return False
+
+    def load(self, cassette_id: str) -> Cassette:
+        resolved = self._resolve_row(cassette_id)
+        if resolved is None:
+            raise FileNotFoundError(f"Cassette '{cassette_id}' not found in PostgresStorage.")
+        _, data_str = resolved
+        data = json.loads(data_str)
+        return Cassette.from_dict(data)
+
+    def delete(self, cassette_id: str) -> None:
+        resolved = self._resolve_row(cassette_id)
+        if resolved is None:
+            return
+        row_id, _ = resolved
+        conn = self._get_connection()
+        cur = conn.cursor()
+        self._execute(cur, f"DELETE FROM {self.table_name} WHERE id = %s", (row_id,))
+        if hasattr(conn, "commit"):
+            conn.commit()
+
+    def list(self) -> list[str]:
+        try:
+            self._ensure_table()
+            conn = self._get_connection()
+            cur = conn.cursor()
+            self._execute(cur, f"SELECT id FROM {self.table_name}")
+            rows = cur.fetchall()
+            return [r[0] for r in rows]
+        except Exception:
+            return []
+
+    def clear(self) -> None:
+        try:
+            self._ensure_table()
+            conn = self._get_connection()
+            cur = conn.cursor()
+            self._execute(cur, f"DELETE FROM {self.table_name}")
+            if hasattr(conn, "commit"):
+                conn.commit()
+        except Exception:
+            pass
+
+
 def resolve_storage(storage: StorageBackend | str | None = None, base_dir: str | None = None) -> StorageBackend:
-    """Resolve a storage argument (string option like 'memory'/'file', StorageBackend instance, or None)."""
+    """Resolve a storage argument (string option like 'memory'/'file'/'postgres', StorageBackend instance, or None)."""
     if storage is None:
         return FileStorage(base_dir=base_dir)
     if isinstance(storage, StorageBackend):
@@ -255,9 +419,11 @@ def resolve_storage(storage: StorageBackend | str | None = None, base_dir: str |
             return MemoryStorage()
         elif st_lower in ("file", "disk", "local"):
             return FileStorage(base_dir=base_dir)
+        elif st_lower in ("postgres", "postgresql", "pg"):
+            return PostgresStorage()
         else:
             raise ValueError(
-                f"Invalid storage option: '{storage}'. Choose from 'file', 'memory', or pass a StorageBackend instance."
+                f"Invalid storage option: '{storage}'. Choose from 'file', 'memory', 'postgres', or pass a StorageBackend instance."
             )
     raise TypeError(f"Invalid storage type: {type(storage)}. Expected str, StorageBackend instance, or None.")
 

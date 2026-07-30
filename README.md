@@ -240,41 +240,37 @@ with cassette("tests/cassettes/tools_flow", mode="replay", adapter=adapter):
     print(replayed.choices[0].message.tool_calls[0].function.arguments)
 ```
 
-### 8. Flexible Storage Spaces (Memory & Disk Backends)
+### 8. Flexible Storage Spaces (File, Memory & PostgreSQL Backends)
 
-Sequa supports modular storage backends via the `storage` parameter. You can specify string options (`"file"` or `"memory"`) or pass a `StorageBackend` instance (`FileStorage` or `MemoryStorage`).
+Sequa supports modular storage backends via the `storage` parameter. You can specify string options (`"file"`, `"memory"`, `"postgres"`) or pass a `StorageBackend` instance (`FileStorage`, `MemoryStorage`, `PostgresStorage`).
 
 - **`storage="file"`** (Default): Stores cassettes as JSON files on disk.
 - **`storage="memory"`**: Stores cassettes in-memory without creating any files on disk — perfect for unit tests, CI pipelines, benchmarking, and quick prototyping.
+- **`storage="postgres"`**: Stores cassettes centrally in a PostgreSQL database table (`sequa_cassettes`). Reads `DATABASE_URL` or `POSTGRES_URL` environment variables by default.
 
 ```python
-from sequa import cassette, MemoryStorage, FileStorage, Cassette
+from sequa import cassette, FileStorage, MemoryStorage, PostgresStorage, Cassette
 
 # 1. File Storage: Store cassettes on disk as JSON files (Default)
 with cassette("tests/cassettes", storage="file"):
     response = model.invoke("Hello file storage!")
 
-# Or using explicit FileStorage instance:
-file_storage = FileStorage(base_dir="tests/cassettes")
-with cassette(storage=file_storage):
-    response = model.invoke("Saved to disk via FileStorage")
-
 # 2. Memory Storage: Store cassettes purely in RAM (zero disk files)
 with cassette(storage="memory"):
     response = model.invoke("Hello in-memory storage!")
 
-# Or using explicit MemoryStorage instance:
-mem = MemoryStorage()
-with cassette(storage=mem):
-    response = model.invoke("Stored in RAM memory")
+# 3. PostgreSQL Storage: Store cassettes in a Postgres database
+pg_storage = PostgresStorage(db_url="postgresql://user:pass@localhost:5432/mydb")
+with cassette(storage=pg_storage):
+    response = model.invoke("Hello Postgres storage!")
 
-# 3. Programmatic Cassette object with FileStorage / MemoryStorage
+# 4. Programmatic Cassette object with custom storage backend
 cas = Cassette(
     request={"messages": [{"role": "user", "content": "hi"}]},
     response={"output": "hello"},
-    storage=FileStorage(base_dir="custom_cassettes")
+    storage=pg_storage
 )
-cas.save(path_or_id="custom_disk_key.json")
+cas.save(path_or_id="pg_custom_key")
 ```
 
 ---

@@ -1,6 +1,6 @@
 [project]
 name = "sequa"
-version = "0.2.0"
+version = "0.3.0"
 description = "Snapshot Testing for LLM Applications"
 readme = "README.md"
 authors = [
@@ -15,6 +15,10 @@ dependencies = [
     "anthropic>=0.18.0",
     "nemoguardrails>=0.23.0",
 ]
+
+[project.optional-dependencies]
+postgres = ["psycopg[binary]>=3.0.0"]
+
 
 [project.scripts]
 sequa = "sequa.cli.main:main"

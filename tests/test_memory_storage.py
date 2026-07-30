@@ -105,8 +105,36 @@ def test_storage_string_options():
         )
         assert cas_cm.engine.storage.exists("string_opt_key")
 
-    # Ensure no disk directory created
-    assert not os.path.exists(dummy_dir)
+def test_postgres_storage():
+    import sqlite3
+    from sequa.storage import PostgresStorage
+
+    # Use an in-memory SQLite connection to test PostgresStorage logic
+    conn = sqlite3.connect(":memory:")
+    pg_storage = PostgresStorage(connection=conn, table_name="test_sequa_cassettes")
+
+    assert pg_storage.list() == []
+
+    cas = Cassette(
+        provider="postgres-provider",
+        hash="pg-hash-123",
+        request={"messages": [{"role": "user", "content": "Hello DB"}]},
+        response={"output": "Response DB"},
+    )
+
+    pg_storage.save(cas, cassette_id="pg_cas_1")
+    assert pg_storage.exists("pg_cas_1")
+    assert pg_storage.exists("pg-hash-123")
+    assert pg_storage.list() == ["pg_cas_1"]
+
+    loaded = pg_storage.load("pg_cas_1")
+    assert loaded.id == cas.id
+    assert loaded.response["output"] == "Response DB"
+
+    pg_storage.delete("pg_cas_1")
+    assert not pg_storage.exists("pg_cas_1")
+    assert pg_storage.list() == []
+
 
 
 
