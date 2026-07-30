@@ -225,4 +225,6 @@ def test_streaming_pii_masking():
         cassette_obj = storage.load(cassette_path)
         
         # Verify prompt masking inside recorded request
-        assert cassette_obj.request["messages"][0] == "Contact [EMAIL] at [PHONE]"
+        msg = cassette_obj.request["messages"][0]
+        msg_content = msg["content"] if isinstance(msg, dict) else msg
+        assert msg_content == "Contact [EMAIL] at [PHONE]"

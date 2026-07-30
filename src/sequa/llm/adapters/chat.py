@@ -47,11 +47,30 @@ class LangChainGroqAdapter(ProviderAdapter):
         else:
             messages_list = []
 
+        normalized_messages = []
+        for m in messages_list:
+            if isinstance(m, dict):
+                normalized_messages.append(m)
+            elif isinstance(m, str):
+                normalized_messages.append({"role": "user", "content": m})
+            elif hasattr(m, "content"):
+                role = getattr(m, "type", None) or getattr(m, "role", "user")
+                if role == "human":
+                    role = "user"
+                elif role == "ai":
+                    role = "assistant"
+                msg_dict: dict[str, Any] = {"role": role, "content": getattr(m, "content", "")}
+                if hasattr(m, "tool_calls") and getattr(m, "tool_calls"):
+                    msg_dict["tool_calls"] = getattr(m, "tool_calls")
+                normalized_messages.append(msg_dict)
+            else:
+                normalized_messages.append(str(m))
+
         return CanonicalRequest(
             provider=self.provider_name,
             model=model,
             temperature=temperature,
-            messages=messages_list,
+            messages=normalized_messages,
             params=serialize_type_or_pydantic(kwargs),
             metadata={"raw_request": raw_payload},
         )

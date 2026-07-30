@@ -895,9 +895,9 @@ class RecorderEngine:
         return {
             "provider": req.provider,
             "model": req.model,
-            "messages": req.messages,
+            "messages": to_serializable(req.messages),
             "temperature": req.temperature,
-            "params": req.params,
+            "params": to_serializable(req.params),
         }
 
     def _serialize_canonical_response(self, resp: CanonicalResponse) -> dict[str, Any]:
