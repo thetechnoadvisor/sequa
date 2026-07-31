@@ -7,10 +7,47 @@ on:
       - master
     paths:
       - 'pyproject.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
 
 jobs:
+  test:
+    name: Run Test Suite (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        python-version: ["3.12", "3.13"]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          version: "latest"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras
+
+      - name: Run pytest
+        run: |
+          uv run pytest
+
   publish:
-    name: Build and publish to PyPI
+    name: Build & Publish to PyPI
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -21,7 +58,10 @@ jobs:
       - name: Check if version in pyproject.toml was updated
         id: check_version
         run: |
-          if git rev-parse HEAD~1 >/dev/null 2>&1; then
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version_updated=true" >> $GITHUB_OUTPUT
+            echo "Workflow dispatched manually. Proceeding with publish."
+          elif git rev-parse HEAD~1 >/dev/null 2>&1; then
             if git diff -U0 HEAD~1 HEAD pyproject.toml | grep -E '^\+[[:space:]]*version[[:space:]]*=' > /dev/null; then
               echo "version_updated=true" >> $GITHUB_OUTPUT
               echo "Version in pyproject.toml was updated in this commit."
@@ -46,10 +86,20 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Build package
+      - name: Install twine
+        if: steps.check_version.outputs.version_updated == 'true'
+        run: |
+          uv pip install twine
+
+      - name: Build package distributions
         if: steps.check_version.outputs.version_updated == 'true'
         run: |
           uv build
+
+      - name: Validate distribution metadata
+        if: steps.check_version.outputs.version_updated == 'true'
+        run: |
+          twine check dist/*
 
       - name: Publish package distributions to PyPI
         if: steps.check_version.outputs.version_updated == 'true'
@@ -57,4 +107,18 @@ jobs:
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
 
+      - name: Extract version for release tag
+        if: steps.check_version.outputs.version_updated == 'true'
+        id: get_version
+        run: |
+          VERSION=$(grep -m1 '^version =' pyproject.toml | cut -d '"' -f 2)
+          echo "version=v${VERSION}" >> $GITHUB_OUTPUT
 
+      - name: Create GitHub Release
+        if: steps.check_version.outputs.version_updated == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          name: Release ${{ steps.get_version.outputs.version }}
+          files: dist/*
+          generate_release_notes: true
