@@ -39,11 +39,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --all-extras
+          uv pip install --system -e ".[dev,postgres,langgraph]"
 
       - name: Run pytest
         run: |
-          uv run pytest
+          pytest
 
   publish:
     name: Build & Publish to PyPI
@@ -86,10 +86,10 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install twine
+      - name: Install dependencies
         if: steps.check_version.outputs.version_updated == 'true'
         run: |
-          uv pip install twine
+          uv pip install --system -e ".[dev,postgres,langgraph]"
 
       - name: Build package distributions
         if: steps.check_version.outputs.version_updated == 'true'

@@ -37,11 +37,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv sync --all-extras
+          uv pip install --system -e ".[dev,postgres,langgraph]"
 
       - name: Run Pytest test suite
         run: |
-          uv run pytest
+          pytest
 
   build-check:
     name: Build & Package Validation
@@ -61,9 +61,9 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install twine
+      - name: Install dependencies
         run: |
-          uv pip install twine
+          uv pip install --system -e ".[dev,postgres,langgraph]"
 
       - name: Build package
         run: |
