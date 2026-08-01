@@ -62,6 +62,10 @@ class Cassette:
         if hasattr(self, "_cm"):
             return self._cm.__exit__(exc_type, exc_val, exc_tb)
 
+    def extract_text(self) -> tuple[str, str, str]:
+        from sequa.search import extract_searchable_text
+        return extract_searchable_text(self)
+
     def __call__(self, fn: Any) -> Any:
         from sequa.cassette import cassette
         return cassette(storage=self.storage)(fn)

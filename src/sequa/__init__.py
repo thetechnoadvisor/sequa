@@ -1,5 +1,6 @@
 from sequa.cassette import cassette
 from sequa.models import Cassette
+from sequa.search import SearchResult, search_cassettes
 from sequa.storage import FileStorage, MemoryStorage, PostgresStorage, StorageBackend
 
 def hello() -> str:
@@ -13,6 +14,9 @@ __all__ = [
     "FileStorage",
     "MemoryStorage",
     "PostgresStorage",
+    "search_cassettes",
+    "SearchResult",
 ]
+
 
 
