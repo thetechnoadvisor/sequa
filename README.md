@@ -130,6 +130,7 @@ Every matching execution after that replays it locally without calling the LLM.
 
 # Features
 
+- 🔎 **Searchable AI Executions & Instant Replay (v0.5.0)**: Find past executions with TF-IDF cosine similarity (`sequa search "refund" --since yesterday`) and generate local replay code (`sequa replay <hash>`).
 - 📼 Record once, replay forever
 - ⚡ Replay, Record, Auto and Live execution modes
 - 🧰 Tool Calling & Function Calling support
@@ -140,9 +141,56 @@ Every matching execution after that replays it locally without calling the LLM.
 - 🎯 Custom ignored fields
 - 🔧 Custom request normalizers
 - 🗂️ File, Memory & PostgreSQL storage backends
-- 🧹 CLI utilities
+- 🧹 CLI utilities (`search`, `replay`, `log`, `stats`, `inspect`, `clean`)
 
 ---
+
+# Searchable AI Executions & Instant Replay (v0.5.0)
+
+When a bug is reported (*"The AI gave the wrong answer yesterday"*), Sequa makes it reproducible in seconds:
+
+```bash
+# 1. Search past executions by TF-IDF cosine similarity & relative time
+sequa search "refund request failed" --since yesterday -i
+
+# 2. Inspect target execution and get instant Python replay code
+sequa replay 1cea06570793
+
+# 3. View chronological Git-like execution history
+sequa log --path cassettes -n 5
+```
+
+Or query programmatically via Python API:
+
+```python
+from sequa import search_cassettes
+
+# Search recorded executions by natural language & metadata
+results = search_cassettes(query="refund request", since="yesterday", provider="openai")
+
+for res in results:
+    print(f"Match Score: {res.score:.4f} | Hash: {res.hash[:12]}")
+    print(f"  Input:  {res.input_snippet}")
+    print(f"  Output: {res.output_snippet}")
+```
+
+---
+
+# CLI Reference
+
+Sequa includes a built-in CLI to search, inspect, format, and debug your recorded cassettes:
+
+| Command | Description | Example |
+| :--- | :--- | :--- |
+| `sequa search` | Search executions by vector cosine similarity, time window, or provider/model | `sequa search "refund" --since yesterday -i` |
+| `sequa log` | Show Git-like chronological execution log | `sequa log --path cassettes -n 10` |
+| `sequa replay` | Inspect a target cassette and generate copy-paste Python replay code | `sequa replay 1cea06570793` |
+| `sequa stats` | View total cassette count, disk size, and saved API latency | `sequa stats --path cassettes` |
+| `sequa inspect` | List all saved cassettes with providers, models, and timestamps | `sequa inspect --path cassettes` |
+| `sequa clean` | Redact volatile timestamps and latency before committing to Git | `sequa clean --remove-latency --remove-timestamps` |
+
+---
+
 
 # Common Use Cases
 
