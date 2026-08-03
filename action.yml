@@ -1,0 +1,65 @@
+name: "Sequa LLM Cassette Testing"
+description: "Deterministic LLM testing & cassette playback with zero API costs using Sequa"
+author: "thetechnoadvisor"
+branding:
+  icon: "disc"
+  color: "purple"
+
+inputs:
+  mode:
+    description: "Sequa execution mode: replay, auto, record, live"
+    required: false
+    default: "replay"
+  cassette-path:
+    description: "Path to cassette recordings directory"
+    required: false
+    default: "tests/cassettes"
+  python-version:
+    description: "Python version to set up"
+    required: false
+    default: "3.12"
+  pytest-args:
+    description: "Additional arguments to pass to pytest"
+    required: false
+    default: ""
+  post-summary:
+    description: "Post cassette statistics report to GitHub Step Summary"
+    required: false
+    default: "true"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f "pyproject.toml" ]; then
+          pip install -e .[dev] || pip install pytest
+        else
+          pip install sequa pytest
+        fi
+
+    - name: Run Sequa Pytest Suite
+      shell: bash
+      run: |
+        pytest --sequa-mode="${{ inputs.mode }}" --sequa-path="${{ inputs.cassette-path }}" ${{ inputs.pytest-args }}
+
+    - name: Generate Sequa Summary
+      if: inputs.post-summary == 'true'
+      shell: bash
+      run: |
+        echo "### 📼 Sequa LLM Test Summary" >> $GITHUB_STEP_SUMMARY
+        echo "**Execution Mode:** \`${{ inputs.mode }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Cassettes Path:** \`${{ inputs.cassette-path }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if command -v sequa &> /dev/null && [ -d "${{ inputs.cassette-path }}" ]; then
+          echo "```" >> $GITHUB_STEP_SUMMARY
+          sequa stats --path "${{ inputs.cassette-path }}" >> $GITHUB_STEP_SUMMARY 2>&1 || true
+          echo "```" >> $GITHUB_STEP_SUMMARY
+        fi

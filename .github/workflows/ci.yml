@@ -41,7 +41,12 @@ jobs:
 
       - name: Run Pytest test suite
         run: |
-          pytest
+          pytest --sequa-mode=replay
+
+      - name: Verify Sequa stats CLI
+        run: |
+          sequa stats --path demo_cassettes || true
+          sequa clean --path demo_cassettes --check || true
 
   build-check:
     name: Build & Package Validation

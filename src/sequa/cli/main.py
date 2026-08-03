@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import copy
+import difflib
 import json
 import os
 import sys
@@ -26,13 +28,179 @@ def load_all_cassettes(path: str) -> list[tuple[str, dict[str, Any]]]:
                     try:
                         with open(file_path, "r", encoding="utf-8") as f:
                             data = json.load(f)
-                            # Simple validation to verify it is a Sequa cassette file
                             if "request" in data and "response" in data:
                                 cassettes.append((file_path, data))
                     except Exception:
-                        # Skip files that are not valid JSON or not cassettes
                         pass
     return cassettes
+
+
+def resolve_cassette(
+    target: str, cassettes: list[tuple[str, dict[str, Any]]]
+) -> tuple[str, dict[str, Any]] | None:
+    """Helper to locate a cassette by file path, filename, hash, or ID."""
+    target = target.strip()
+    if os.path.isfile(target):
+        try:
+            with open(target, "r", encoding="utf-8") as f:
+                return target, json.load(f)
+        except Exception:
+            pass
+
+    for path, data in cassettes:
+        cass_id = data.get("id", "")
+        cass_hash = data.get("hash", "")
+        filename = os.path.basename(path)
+
+        if target in (cass_id, cass_hash, filename, path) or (
+            len(target) >= 4 and (cass_hash.startswith(target) or cass_id.startswith(target))
+        ):
+            return path, data
+
+    return None
+
+
+def format_cassette_for_diff(
+    data: dict[str, Any], ignore_fields: list[str] | None = None
+) -> str:
+    """Format canonical request, response, and metadata cleanly as JSON string for line-by-line diffing."""
+    d = copy.deepcopy(data)
+    if ignore_fields:
+        for field in ignore_fields:
+            d.pop(field, None)
+            if "request" in d and isinstance(d["request"], dict):
+                d["request"].pop(field, None)
+            if "response" in d and isinstance(d["response"], dict):
+                d["response"].pop(field, None)
+            if "metadata" in d and isinstance(d["metadata"], dict):
+                d["metadata"].pop(field, None)
+    return json.dumps(d, indent=2, sort_keys=True, ensure_ascii=False)
+
+
+def render_diff_text(
+    label1: str, label2: str, json1_str: str, json2_str: str, use_color: bool = True
+) -> str:
+    """Render terminal text diff (with optional ANSI colors)."""
+    lines1 = json1_str.splitlines(keepends=True)
+    lines2 = json2_str.splitlines(keepends=True)
+    diff = list(difflib.unified_diff(lines1, lines2, fromfile=label1, tofile=label2))
+
+    if not diff:
+        return "No differences found between cassettes.\n"
+
+    output = []
+    for line in diff:
+        if use_color and sys.stdout.isatty():
+            if line.startswith("---") or line.startswith("+++"):
+                output.append(f"\033[1;36m{line}\033[0m")
+            elif line.startswith("@@"):
+                output.append(f"\033[33m{line}\033[0m")
+            elif line.startswith("+"):
+                output.append(f"\033[32m{line}\033[0m")
+            elif line.startswith("-"):
+                output.append(f"\033[31m{line}\033[0m")
+            else:
+                output.append(line)
+        else:
+            output.append(line)
+    return "".join(output)
+
+
+def render_diff_markdown(
+    label1: str,
+    label2: str,
+    data1: dict[str, Any],
+    data2: dict[str, Any],
+    json1_str: str,
+    json2_str: str,
+) -> str:
+    """Render clean GitHub Markdown comparison report with summary metadata table and diff fence."""
+    lines1 = json1_str.splitlines(keepends=True)
+    lines2 = json2_str.splitlines(keepends=True)
+    diff_lines = list(difflib.unified_diff(lines1, lines2, fromfile=label1, tofile=label2))
+
+    md = []
+    md.append("# Sequa Cassette Execution Diff\n\n")
+    md.append(
+        f"**Execution 1:** `{label1}` ({data1.get('provider', 'unknown')} / {data1.get('request', {}).get('model', 'unknown')})\n"
+    )
+    md.append(
+        f"**Execution 2:** `{label2}` ({data2.get('provider', 'unknown')} / {data2.get('request', {}).get('model', 'unknown')})\n\n"
+    )
+
+    md.append("## Summary Comparison\n\n")
+    md.append("| Metric | Execution 1 | Execution 2 |\n")
+    md.append("| :--- | :--- | :--- |\n")
+    md.append(f"| Hash | `{data1.get('hash', 'N/A')[:12]}` | `{data2.get('hash', 'N/A')[:12]}` |\n")
+    md.append(f"| Provider | `{data1.get('provider', 'N/A')}` | `{data2.get('provider', 'N/A')}` |\n")
+    md.append(
+        f"| Model | `{data1.get('request', {}).get('model', 'N/A')}` | `{data2.get('request', {}).get('model', 'N/A')}` |\n"
+    )
+    md.append(
+        f"| Created At | `{data1.get('created_at', 'N/A')}` | `{data2.get('created_at', 'N/A')}` |\n\n"
+    )
+
+    md.append("## Unified Diff\n\n")
+    if not diff_lines:
+        md.append("_No differences found between cassettes._\n")
+    else:
+        md.append("```diff\n")
+        md.append("".join(diff_lines))
+        md.append("```\n")
+
+    return "".join(md)
+
+
+def render_diff_html(
+    label1: str,
+    label2: str,
+    data1: dict[str, Any],
+    data2: dict[str, Any],
+    json1_str: str,
+    json2_str: str,
+) -> str:
+    """Render HTML diff report with modern dark theme styling."""
+    lines1 = json1_str.splitlines()
+    lines2 = json2_str.splitlines()
+
+    html_diff = difflib.HtmlDiff().make_table(
+        lines1, lines2, fromdesc=label1, todesc=label2, context=True, numlines=3
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sequa Cassette Diff: {label1} vs {label2}</title>
+<style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #0d1117; color: #c9d1d9; padding: 20px; }}
+    h1 {{ color: #58a6ff; font-size: 24px; border-bottom: 1px solid #30363d; padding-bottom: 10px; }}
+    .meta-table {{ border-collapse: collapse; margin-bottom: 20px; width: 100%; max-width: 800px; }}
+    .meta-table th, .meta-table td {{ border: 1px solid #30363d; padding: 8px 12px; text-align: left; }}
+    .meta-table th {{ background-color: #161b22; color: #8b949e; }}
+    table.diff {{ font-family: monospace; font-size: 13px; border-collapse: collapse; width: 100%; background: #161b22; border: 1px solid #30363d; border-radius: 6px; overflow: hidden; }}
+    .diff td, .diff th {{ padding: 2px 6px; border: none; }}
+    .diff_header {{ background-color: #21262d; color: #8b949e; text-align: right; width: 40px; user-select: none; }}
+    .diff_next {{ background-color: #21262d; width: 20px; text-align: center; }}
+    .diff_add {{ background-color: #124027; color: #7ee787; }}
+    .diff_chg {{ background-color: #3b2300; color: #d29922; }}
+    .diff_sub {{ background-color: #490202; color: #ff7b72; }}
+</style>
+</head>
+<body>
+<h1>📼 Sequa Cassette Execution Diff</h1>
+<table class="meta-table">
+    <tr><th>Metric</th><th>Execution 1 ({label1})</th><th>Execution 2 ({label2})</th></tr>
+    <tr><td>Hash</td><td><code>{data1.get('hash', 'N/A')[:12]}</code></td><td><code>{data2.get('hash', 'N/A')[:12]}</code></td></tr>
+    <tr><td>Provider</td><td><code>{data1.get('provider', 'N/A')}</code></td><td><code>{data2.get('provider', 'N/A')}</code></td></tr>
+    <tr><td>Model</td><td><code>{data1.get('request', {}).get('model', 'N/A')}</code></td><td><code>{data2.get('request', {}).get('model', 'N/A')}</code></td></tr>
+    <tr><td>Created At</td><td><code>{data1.get('created_at', 'N/A')}</code></td><td><code>{data2.get('created_at', 'N/A')}</code></td></tr>
+</table>
+<h2>Differences Table</h2>
+{html_diff}
+</body>
+</html>
+"""
 
 
 def cmd_stats(args: argparse.Namespace) -> int:
@@ -47,17 +215,15 @@ def cmd_stats(args: argparse.Namespace) -> int:
     total_size_bytes = 0
 
     for path, data in cassettes:
-        # Size
         try:
             total_size_bytes += os.path.getsize(path)
         except Exception:
             pass
-        
-        # Latency
+
         latency = data.get("metadata", {}).get("latency_ms")
         if latency is None:
             latency = data.get("response", {}).get("latency")
-        
+
         if latency is not None:
             try:
                 total_latency_ms += float(latency)
@@ -86,14 +252,12 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     for path, data in cassettes:
         filename = os.path.basename(path)
         provider = data.get("provider", "unknown")
-        
-        # Get model
+
         req = data.get("request", {})
         model = req.get("model") or "unknown"
-        
+
         created_at = data.get("created_at", "unknown")
-        
-        # Format filename to fit table neatly
+
         if len(filename) > 38:
             filename_display = filename[:35] + "..."
         else:
@@ -113,8 +277,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
     cleaned_count = 0
     for path, data in cassettes:
         modified = False
-        
-        # 1. Remove latency metadata if requested
+
         if args.remove_latency:
             if "metadata" in data and "latency_ms" in data["metadata"]:
                 del data["metadata"]["latency_ms"]
@@ -123,14 +286,13 @@ def cmd_clean(args: argparse.Namespace) -> int:
                 del data["response"]["latency"]
                 modified = True
 
-        # 2. Remove timestamps if requested
         if args.remove_timestamps:
             if "created_at" in data:
                 data["created_at"] = ""
                 modified = True
 
-        # 3. Format/Sort keys cleanly (always done during clean)
         from sequa.utils import sort_dict_keys
+
         data = sort_dict_keys(data)
         modified = True
 
@@ -144,6 +306,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
 
     if os.path.isdir(args.path):
         from sequa.storage import update_metadata_index
+
         update_metadata_index(args.path)
 
     print(f"Successfully formatted/cleaned {cleaned_count} cassettes.")
@@ -153,12 +316,12 @@ def cmd_clean(args: argparse.Namespace) -> int:
 def cmd_log(args: argparse.Namespace) -> int:
     """Git-like log listing execution cassettes chronologically."""
     from sequa.search import extract_searchable_text
+
     cassettes = load_all_cassettes(args.path)
     if not cassettes:
         print(f"No cassettes found at path: {args.path}")
         return 0
 
-    # Sort descending by created_at
     def sort_key(item: tuple[str, dict[str, Any]]) -> str:
         return item[1].get("created_at") or ""
 
@@ -167,7 +330,9 @@ def cmd_log(args: argparse.Namespace) -> int:
     display_list = sorted_cassettes[:limit]
 
     print("================================================================================")
-    print(f" Sequa Cassette Execution Log (Showing {len(display_list)} of {len(sorted_cassettes)})")
+    print(
+        f" Sequa Cassette Execution Log (Showing {len(display_list)} of {len(sorted_cassettes)})"
+    )
     print("================================================================================")
 
     for path, data in display_list:
@@ -176,7 +341,7 @@ def cmd_log(args: argparse.Namespace) -> int:
         provider = data.get("provider", "unknown")
         model = data.get("request", {}).get("model") or "unknown"
         created_at = data.get("created_at", "unknown")
-        
+
         latency = data.get("metadata", {}).get("latency_ms")
         if latency is None:
             latency = data.get("response", {}).get("latency")
@@ -222,15 +387,45 @@ def cmd_search(args: argparse.Namespace) -> int:
     for idx, res in enumerate(results, 1):
         short_hash = res.hash[:12] if len(res.hash) > 12 else res.hash
         score_str = f"{res.score:.4f}"
-        print(f"{idx:<4} | {score_str:<7} | {short_hash:<12} | {res.provider[:15]:<15} | {res.model[:20]:<20}")
+        print(
+            f"{idx:<4} | {score_str:<7} | {short_hash:<12} | {res.provider[:15]:<15} | {res.model[:20]:<20}"
+        )
         print(f"     Input:  {res.input_snippet}")
         print(f"     Output: {res.output_snippet}")
         print("-" * 80)
 
     if getattr(args, "interactive", False):
         try:
-            user_input = input("\nEnter cassette number to inspect & replay (or press Enter to exit): ").strip()
-            if user_input.isdigit():
+            user_input = input(
+                "\nEnter cassette number to inspect (e.g. 1) or diff two results (e.g. 1,2 or diff 1 2) [Enter to exit]: "
+            ).strip()
+            if not user_input:
+                return 0
+
+            cleaned_input = user_input.replace("diff", "").replace(",", " ").strip()
+            parts = cleaned_input.split()
+
+            if len(parts) == 2 and all(p.isdigit() for p in parts):
+                idx1, idx2 = int(parts[0]), int(parts[1])
+                if 1 <= idx1 <= len(results) and 1 <= idx2 <= len(results):
+                    res1 = results[idx1 - 1]
+                    res2 = results[idx2 - 1]
+                    print("\n" + "=" * 80)
+                    print(
+                        f" Interactive Diff: Result #{idx1} ({res1.hash[:12]}) vs Result #{idx2} ({res2.hash[:12]})"
+                    )
+                    print("=" * 80)
+
+                    diff_args = argparse.Namespace(
+                        execution_1=res1.file_path,
+                        execution_2=res2.file_path,
+                        path=args.path,
+                        format="text",
+                        output=None,
+                        ignore_fields=[],
+                    )
+                    cmd_diff(diff_args)
+            elif user_input.isdigit():
                 choice = int(user_input)
                 if 1 <= choice <= len(results):
                     sel = results[choice - 1]
@@ -254,30 +449,23 @@ def cmd_search(args: argparse.Namespace) -> int:
 def cmd_replay(args: argparse.Namespace) -> int:
     """Inspect and generate code snippet to replay a specific cassette."""
     cassettes = load_all_cassettes(args.path)
-    target = args.target.strip()
+    res = resolve_cassette(args.target, cassettes)
 
-    selected_path = None
-    selected_data = None
-
-    for path, data in cassettes:
-        cass_id = data.get("id", "")
-        cass_hash = data.get("hash", "")
-        filename = os.path.basename(path)
-
-        if target in (cass_id, cass_hash, filename, path) or (len(target) >= 6 and (cass_hash.startswith(target) or cass_id.startswith(target))):
-            selected_path = path
-            selected_data = data
-            break
-
-    if not selected_path or not selected_data:
-        print(f"Error: Cassette matching '{target}' not found at path: {args.path}", file=sys.stderr)
+    if not res:
+        print(
+            f"Error: Cassette matching '{args.target}' not found at path: {args.path}",
+            file=sys.stderr,
+        )
         return 1
 
+    selected_path, selected_data = res
+
     from sequa.search import extract_searchable_text
+
     _, in_snip, out_snip = extract_searchable_text(selected_data)
 
     print("================================================================================")
-    print(f" Sequa Replay Target: {selected_data.get('hash', target)}")
+    print(f" Sequa Replay Target: {selected_data.get('hash', args.target)}")
     print("================================================================================")
     print(f"File Path:  {selected_path}")
     print(f"Provider:   {selected_data.get('provider', 'unknown')}")
@@ -293,6 +481,59 @@ def cmd_replay(args: argparse.Namespace) -> int:
     print(f'with cassette("{dir_path}"):')
     print("    # Execute model call here; response will be replayed deterministically!")
     print("================================================================================")
+
+    return 0
+
+
+def cmd_diff(args: argparse.Namespace) -> int:
+    """Compare two cassette recordings and display/save diff in text, markdown, or HTML format."""
+    cassettes = load_all_cassettes(args.path)
+
+    res1 = resolve_cassette(args.execution_1, cassettes)
+    res2 = resolve_cassette(args.execution_2, cassettes)
+
+    if not res1:
+        print(
+            f"Error: Execution 1 '{args.execution_1}' not found at path: {args.path}",
+            file=sys.stderr,
+        )
+        return 1
+    if not res2:
+        print(
+            f"Error: Execution 2 '{args.execution_2}' not found at path: {args.path}",
+            file=sys.stderr,
+        )
+        return 1
+
+    path1, data1 = res1
+    path2, data2 = res2
+
+    label1 = data1.get("hash", "")[:12] or os.path.basename(path1)
+    label2 = data2.get("hash", "")[:12] or os.path.basename(path2)
+
+    ignore_fields = getattr(args, "ignore_fields", None) or []
+    json1_str = format_cassette_for_diff(data1, ignore_fields)
+    json2_str = format_cassette_for_diff(data2, ignore_fields)
+
+    fmt = (getattr(args, "format", None) or "text").lower()
+
+    if fmt == "html" or (args.output and args.output.endswith(".html")):
+        diff_output = render_diff_html(label1, label2, data1, data2, json1_str, json2_str)
+    elif fmt in ("markdown", "md") or (args.output and args.output.endswith(".md")):
+        diff_output = render_diff_markdown(label1, label2, data1, data2, json1_str, json2_str)
+    else:
+        diff_output = render_diff_text(label1, label2, json1_str, json2_str)
+
+    if args.output:
+        try:
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(diff_output)
+            print(f"Diff report successfully saved to: {args.output}")
+        except Exception as e:
+            print(f"Error writing output file {args.output}: {e}", file=sys.stderr)
+            return 1
+    else:
+        print(diff_output)
 
     return 0
 
@@ -400,7 +641,7 @@ def main() -> None:
         "--interactive",
         "-i",
         action="store_true",
-        help="Interactively select a search result to view details and replay snippet.",
+        help="Interactively select a search result to view details, replay snippet, or diff two results.",
     )
 
     # replay
@@ -414,6 +655,43 @@ def main() -> None:
         "-p",
         default="cassettes",
         help="Path to the cassettes directory (default: 'cassettes').",
+    )
+
+    # diff
+    parser_diff = subparsers.add_parser(
+        "diff", help="Compare two cassette recordings and display/save diff."
+    )
+    parser_diff.add_argument(
+        "execution_1",
+        help="Hash, ID, or file path of the first cassette execution.",
+    )
+    parser_diff.add_argument(
+        "execution_2",
+        help="Hash, ID, or file path of the second cassette execution.",
+    )
+    parser_diff.add_argument(
+        "--path",
+        "-p",
+        default="cassettes",
+        help="Path to the cassettes directory (default: 'cassettes').",
+    )
+    parser_diff.add_argument(
+        "--format",
+        "-f",
+        choices=["text", "markdown", "md", "html"],
+        default="text",
+        help="Output format: text (default), markdown, or html.",
+    )
+    parser_diff.add_argument(
+        "--output",
+        "-o",
+        help="File path to save the diff output (e.g. diff.html or diff.md).",
+    )
+    parser_diff.add_argument(
+        "--ignore-fields",
+        nargs="*",
+        default=[],
+        help="Additional fields to exclude when computing diff.",
     )
 
     args = parser.parse_args()
@@ -430,8 +708,9 @@ def main() -> None:
         sys.exit(cmd_search(args))
     elif args.command == "replay":
         sys.exit(cmd_replay(args))
+    elif args.command == "diff":
+        sys.exit(cmd_diff(args))
 
 
 if __name__ == "__main__":
     main()
-
