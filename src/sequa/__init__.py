@@ -1,5 +1,15 @@
 from sequa.cassette import cassette
 from sequa.models import Cassette
+from sequa.regression import (
+    CostDiff,
+    LatencyDiff,
+    PromptDiff,
+    RegressionError,
+    RegressionReport,
+    SemanticDiff,
+    ToolDiff,
+    compare_executions,
+)
 from sequa.search import SearchResult, search_cassettes
 from sequa.storage import FileStorage, MemoryStorage, PostgresStorage, StorageBackend
 
@@ -16,6 +26,14 @@ __all__ = [
     "PostgresStorage",
     "search_cassettes",
     "SearchResult",
+    "compare_executions",
+    "RegressionReport",
+    "PromptDiff",
+    "ToolDiff",
+    "SemanticDiff",
+    "CostDiff",
+    "LatencyDiff",
+    "RegressionError",
 ]
 
 

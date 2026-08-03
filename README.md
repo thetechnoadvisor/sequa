@@ -130,9 +130,10 @@ Every matching execution after that replays it locally without calling the LLM.
 
 # Features
 
-- 🔎 **Searchable AI Executions & Instant Replay (v0.5.0)**: Find past executions with TF-IDF cosine similarity (`sequa search "refund" --since yesterday`) and generate local replay code (`sequa replay <hash>`).
+- 🧪 **Phase 2 AI Regression Testing Engine**: Compare reference cassettes against new executions across 5 analysis dimensions: **Prompt Diff**, **Tool Diff**, **Semantic Diff**, **Cost Diff**, and **Latency Diff**.
+- 🔎 **Searchable AI Executions & Instant Replay**: Find past executions with TF-IDF cosine similarity (`sequa search "refund" --since yesterday`) and generate local replay code (`sequa replay <hash>`).
 - 📼 Record once, replay forever
-- ⚡ Replay, Record, Auto and Live execution modes
+- ⚡ Replay, Record, Auto, Live, and **Regression** execution modes
 - 🧰 Tool Calling & Function Calling support
 - 🌊 Streaming support (sync & async)
 - 🔒 PII & Sensitive Information Masking
@@ -141,7 +142,7 @@ Every matching execution after that replays it locally without calling the LLM.
 - 🎯 Custom ignored fields
 - 🔧 Custom request normalizers
 - 🗂️ File, Memory & PostgreSQL storage backends
-- 🧹 CLI utilities (`search`, `replay`, `log`, `stats`, `inspect`, `clean`)
+- 🧹 CLI utilities (`regression`, `diff`, `search`, `replay`, `log`, `stats`, `inspect`, `clean`)
 
 ---
 
@@ -209,6 +210,55 @@ sequa diff 1cea06570793 4b93d6e3 -f html -o diff.html
 # 4. Interactive Diff from Search Results
 sequa search "refund request" -i
 # Enter result numbers to diff (e.g., '1,2' or 'diff 1 2'):
+```
+
+---
+
+# Phase 2: AI Regression Testing Engine 🧪
+
+Replay testing validates that an app runs deterministically against recorded cassettes. **Phase 2 Regression Testing** compares an **Old Cassette** (reference run) against a **New Execution** (live call or updated model) across **5 distinct analysis dimensions**:
+
+$$\text{Old Cassette} \longrightarrow \text{New Execution} \longrightarrow \begin{cases} \text{1. 📝 Prompt Diff} \\ \text{2. 🛠️ Tool Diff} \\ \text{3. 🧠 Semantic Diff} \\ \text{4. 💰 Cost Diff} \\ \text{5. ⚡ Latency Diff} \end{cases}$$
+
+### Python API
+
+```python
+from sequa import compare_executions, cassette
+
+# Programmatic 5-dimension comparison
+report = compare_executions("tests/cassettes/ref_run.json", "tests/cassettes/new_run.json")
+
+print(f"Semantic Similarity: {report.semantic_diff.similarity_score * 100:.1f}%")
+print(f"Token Delta: {report.cost_diff.token_delta['total']:+d} tokens")
+print(f"Latency Delta: {report.latency_diff.delta_ms:+.1f} ms")
+
+# Enforce CI assertion rules
+report.assert_no_regression(
+    similarity_threshold=0.85,
+    allow_tool_changes=False,
+    max_cost_increase_pct=15.0,
+    max_latency_increase_pct=25.0,
+)
+
+# Inline cassette execution with mode="regression"
+with cassette(path="tests/cassettes/support_flow.json", mode="regression") as cas:
+    response = model.invoke("How do I request a refund?")
+    reg_report = cas.regression_report
+    print(reg_report.render_text())
+```
+
+### CLI Command
+
+```bash
+# Run 5-dimension regression test comparing two cassette recordings
+sequa regression reference_run.json new_run.json
+
+# Fail CI build if semantic output drifts below 85% threshold
+sequa regression reference_run.json new_run.json --fail-on-drift --threshold 0.85
+
+# Export GitHub Markdown or HTML regression report
+sequa regression old_hash new_hash -f markdown -o regression_report.md
+sequa regression old_hash new_hash -f html -o regression_report.html
 ```
 
 ---

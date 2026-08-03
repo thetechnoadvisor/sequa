@@ -278,9 +278,10 @@ class RecorderEngine:
 
         from sequa.guardrails import NeMoGuardrailsEngine
         self.guardrails_engine = NeMoGuardrailsEngine(guardrails)
+        self.last_regression_report: Any | None = None
 
-        if self.mode not in ("replay", "record", "auto", "live"):
-            raise ValueError(f"Invalid mode: {self.mode}. Must be replay, record, auto, or live.")
+        if self.mode not in ("replay", "record", "auto", "live", "regression"):
+            raise ValueError(f"Invalid mode: {self.mode}. Must be replay, record, auto, live, or regression.")
 
     def get_cassette_path(self, req_hash: str, provider: str = "") -> str:
         """Resolve the path to the cassette file based on request hash, provider, and configured path."""
@@ -318,7 +319,25 @@ class RecorderEngine:
                 if target_file in files:
                     return os.path.join(root, target_file)
 
-        # 5. Default saving path
+        # 5. Fallback for regression mode: locate existing reference cassette in self.path or storage
+        if self.mode == "regression":
+            if self.storage.exists(self.path):
+                return self.path
+            if self.path.lower().endswith(".json") and self.storage.exists(self.path):
+                return self.path
+            if os.path.isdir(self.path):
+                for root, _, files in os.walk(self.path):
+                    for file in sorted(files):
+                        if file.endswith(".json") and file != "metadata.json":
+                            return os.path.join(root, file)
+            stored_list = self.storage.list()
+            if stored_list:
+                for k in stored_list:
+                    if self.path in k or k in self.path:
+                        return k
+                return stored_list[0]
+
+        # 6. Default saving path
         return self.get_cassette_path(req_hash, provider)
 
 
@@ -573,6 +592,30 @@ class RecorderEngine:
                 self.storage.save(cassette_obj, save_path, base_dir=self.path)
             return adapter.from_canonical_response(blocked_resp, args, is_parse=is_parse, **kwargs)
 
+        # Mode: regression
+        if self.mode == "regression":
+            if not self.storage.exists(cassette_path):
+                raise CassetteNotFoundError(
+                    f"Reference cassette not found for regression comparison at path: {cassette_path}"
+                )
+            old_cassette_obj = self.storage.load(cassette_path)
+            start_time = time.perf_counter()
+            live_response = make_live_call_fn(*args, **kwargs)
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
+            canonical_resp = adapter.to_canonical_response(live_response, **kwargs)
+            serialized_req = self._serialize_canonical_request(canonical_req)
+            serialized_resp = self._serialize_canonical_response(canonical_resp)
+            new_cassette_obj = Cassette(
+                provider=canonical_req.provider,
+                hash=req_hash,
+                request=serialized_req,
+                response=serialized_resp,
+                metadata={"duration_ms": duration_ms, "latency_ms": duration_ms},
+            )
+            from sequa.regression import compare_executions
+            self.last_regression_report = compare_executions(old_cassette_obj, new_cassette_obj)
+            return live_response
+
         # Mode: live
         if self.mode == "live":
             live_response = make_live_call_fn(*args, **kwargs)
@@ -762,6 +805,30 @@ class RecorderEngine:
                 )
                 self.storage.save(cassette_obj, save_path, base_dir=self.path)
             return adapter.from_canonical_response(blocked_resp, args, is_parse=is_parse, **kwargs)
+
+        # Mode: regression
+        if self.mode == "regression":
+            if not self.storage.exists(cassette_path):
+                raise CassetteNotFoundError(
+                    f"Reference cassette not found for regression comparison at path: {cassette_path}"
+                )
+            old_cassette_obj = self.storage.load(cassette_path)
+            start_time = time.perf_counter()
+            live_response = await make_live_call_fn(*args, **kwargs)
+            duration_ms = (time.perf_counter() - start_time) * 1000.0
+            canonical_resp = adapter.to_canonical_response(live_response, **kwargs)
+            serialized_req = self._serialize_canonical_request(canonical_req)
+            serialized_resp = self._serialize_canonical_response(canonical_resp)
+            new_cassette_obj = Cassette(
+                provider=canonical_req.provider,
+                hash=req_hash,
+                request=serialized_req,
+                response=serialized_resp,
+                metadata={"duration_ms": duration_ms, "latency_ms": duration_ms},
+            )
+            from sequa.regression import compare_executions
+            self.last_regression_report = compare_executions(old_cassette_obj, new_cassette_obj)
+            return live_response
 
         # Mode: live
         if self.mode == "live":

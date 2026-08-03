@@ -1,4 +1,4 @@
-"""Pytest plugin for Sequa LLM cassette recording and replaying."""
+"""Pytest plugin for Sequa LLM cassette recording, replaying, and Phase 2 Regression Testing."""
 
 from __future__ import annotations
 
@@ -16,8 +16,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         "--sequa-mode",
         action="store",
         default=None,
-        choices=["auto", "record", "replay", "live"],
-        help="Global override for Sequa execution mode (auto, record, replay, live).",
+        choices=["auto", "record", "replay", "live", "regression"],
+        help="Global override for Sequa execution mode (auto, record, replay, live, regression).",
     )
     group.addoption(
         "--sequa-path",
@@ -32,6 +32,19 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="Enable automatic PII masking for all recorded cassettes.",
     )
     group.addoption(
+        "--sequa-fail-on-drift",
+        action="store_true",
+        default=False,
+        help="Fail regression test if semantic similarity drops below threshold.",
+    )
+    group.addoption(
+        "--sequa-similarity-threshold",
+        action="store",
+        type=float,
+        default=0.85,
+        help="Minimum semantic similarity threshold for regression tests (default: 0.85).",
+    )
+    group.addoption(
         "--disable-sequa",
         action="store_true",
         default=False,
@@ -40,7 +53,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
 
 
 def pytest_configure(config: pytest.Config) -> None:
-    """Register Sequa custom markers in pytest."""
+    """Register Sequa custom markers and initialize report storage."""
     config.addinivalue_line(
         "markers",
         "sequa(**kwargs): Wrap test function in a Sequa cassette context manager. "
@@ -50,13 +63,25 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "cassette(**kwargs): Alias for pytest.mark.sequa.",
     )
+    config.addinivalue_line(
+        "markers",
+        "sequa_regression(**kwargs): Convenience marker for Phase 2 Sequa regression testing.",
+    )
+    config._sequa_regression_reports = []  # type: ignore[attr-defined]
 
 
 def _get_marker_kwargs(request: pytest.FixtureRequest) -> dict[str, Any]:
-    """Extract marker options from @pytest.mark.sequa or @pytest.mark.cassette."""
-    marker = request.node.get_closest_marker("sequa") or request.node.get_closest_marker("cassette")
+    """Extract marker options from @pytest.mark.sequa, @pytest.mark.cassette, or @pytest.mark.sequa_regression."""
+    marker = (
+        request.node.get_closest_marker("sequa_regression")
+        or request.node.get_closest_marker("sequa")
+        or request.node.get_closest_marker("cassette")
+    )
     if marker:
-        return dict(marker.kwargs)
+        kwargs = dict(marker.kwargs)
+        if marker.name == "sequa_regression" and "mode" not in kwargs:
+            kwargs["mode"] = "regression"
+        return kwargs
     return {}
 
 
@@ -117,6 +142,19 @@ def sequa_cassette(request: pytest.FixtureRequest) -> Generator[cassette | None,
 
     with cassette(**cassette_kwargs) as cas:
         yield cas
+        report = cas.regression_report
+        if report is not None:
+            reports = getattr(request.config, "_sequa_regression_reports", [])
+            reports.append((request.node.name, report))
+            fail_on_drift = request.config.getoption("--sequa-fail-on-drift", default=False) or marker_kwargs.get(
+                "fail_on_drift", False
+            )
+            threshold = request.config.getoption(
+                "--sequa-similarity-threshold", default=0.85
+            ) or marker_kwargs.get("similarity_threshold", 0.85)
+
+            if fail_on_drift or marker_kwargs.get("mode") == "regression":
+                report.assert_no_regression(similarity_threshold=threshold)
 
 
 @pytest.fixture
@@ -127,13 +165,12 @@ def cassette_fixture(sequa_cassette: cassette | None) -> cassette | None:
 
 @pytest.hookimpl(tryfirst=True, hookwrapper=True)
 def pytest_runtest_call(item: pytest.Item) -> Generator[None, None, None]:
-    """Autouse wrapper for tests annotated with @pytest.mark.sequa or @pytest.mark.cassette.
-
-    If a test function or test class has @pytest.mark.sequa / @pytest.mark.cassette
-    and does not explicitly request the `sequa_cassette` fixture, this hook automatically
-    wraps the test call within a cassette context.
-    """
-    marker = item.get_closest_marker("sequa") or item.get_closest_marker("cassette")
+    """Autouse wrapper for tests annotated with @pytest.mark.sequa / cassette / sequa_regression."""
+    marker = (
+        item.get_closest_marker("sequa_regression")
+        or item.get_closest_marker("sequa")
+        or item.get_closest_marker("cassette")
+    )
     disabled = item.config.getoption("--disable-sequa", default=False)
 
     fixture_requested = (
@@ -143,6 +180,9 @@ def pytest_runtest_call(item: pytest.Item) -> Generator[None, None, None]:
 
     if marker and not disabled and not fixture_requested:
         marker_kwargs = dict(marker.kwargs)
+        if marker.name == "sequa_regression" and "mode" not in marker_kwargs:
+            marker_kwargs["mode"] = "regression"
+
         cli_mode = item.config.getoption("--sequa-mode", default=None)
         mode = cli_mode or marker_kwargs.get("mode", "auto")
 
@@ -169,7 +209,50 @@ def pytest_runtest_call(item: pytest.Item) -> Generator[None, None, None]:
             if key in marker_kwargs:
                 kwargs[key] = marker_kwargs[key]
 
-        with cassette(**kwargs):
+        with cassette(**kwargs) as cas:
             yield
+            report = cas.regression_report
+            if report is not None:
+                reports = getattr(item.config, "_sequa_regression_reports", [])
+                reports.append((item.name, report))
+                fail_on_drift = item.config.getoption("--sequa-fail-on-drift", default=False) or marker_kwargs.get(
+                    "fail_on_drift", False
+                )
+                threshold = item.config.getoption(
+                    "--sequa-similarity-threshold", default=0.85
+                ) or marker_kwargs.get("similarity_threshold", 0.85)
+
+                if fail_on_drift or mode == "regression":
+                    report.assert_no_regression(similarity_threshold=threshold)
     else:
         yield
+
+
+def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: pytest.Config) -> None:
+    """Print Phase 2 Sequa Regression Test Summary Table after pytest execution."""
+    reports = getattr(config, "_sequa_regression_reports", [])
+    if not reports:
+        return
+
+    tr = terminalreporter
+    tr.write_sep("=", "SEQUA PHASE 2 REGRESSION TEST SUMMARY", bold=True, cyan=True)
+
+    header = f"{'Test Name':<35} | {'Similarity':<10} | {'Status':<15} | {'Tokens Delta':<14} | {'Latency Delta':<14}"
+    tr.write_line(header)
+    tr.write_line("-" * len(header))
+
+    for test_name, rep in reports:
+        sim_pct = f"{rep.semantic_diff.similarity_score * 100:.1f}%"
+        status = rep.semantic_diff.status
+        tok_delta = f"{rep.cost_diff.token_delta['total']:+d}"
+        lat_delta = f"{rep.latency_diff.delta_ms:+.1f} ms"
+
+        line = f"{test_name[:35]:<35} | {sim_pct:<10} | {status:<15} | {tok_delta:<14} | {lat_delta:<14}"
+        if status == "MATCH":
+            tr.write_line(line, green=True)
+        elif status == "MINOR_DIFF":
+            tr.write_line(line, yellow=True)
+        else:
+            tr.write_line(line, red=True)
+
+    tr.write_line("")

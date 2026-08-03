@@ -33,13 +33,14 @@ class cassette:
     path : str, default="cassettes"
         The file or directory path where cassette recordings will be saved or read.
         Can be a directory path (e.g. ``"tests/cassettes"``) or a specific file path (e.g. ``"my_test.json"``).
-    mode : {"auto", "record", "replay", "live"}, default="auto"
+    mode : {"auto", "record", "replay", "live", "regression"}, default="auto"
         Execution mode controlling LLM playback behavior:
         
         * ``"auto"`` : Replays from cassette if a matching recording exists, otherwise makes a live call and records it.
         * ``"record"`` : Always makes a live API call and records/overwrites the cassette file.
         * ``"replay"`` : Only replays from existing cassettes. Raises ``CassetteNotFoundError`` if no match is found.
         * ``"live"`` : Direct pass-through to live API, bypassing Sequa recording and replaying entirely.
+        * ``"regression"`` : Executes live call and performs 5-dimension regression diff analysis against reference cassette.
     ignore_fields : list of str, optional
         List of request payload keys to exclude when hashing requests for matching.
         Useful for dynamic or non-deterministic parameters like ``["temperature", "max_tokens", "seed"]``.
@@ -131,6 +132,11 @@ class cassette:
         )
         self.original_methods: list[tuple[type, str, Any]] = []
         self.patchers: list[Any] = []
+
+    @property
+    def regression_report(self) -> Any | None:
+        """Returns the active or last generated RegressionReport if mode='regression'."""
+        return getattr(self.engine, "last_regression_report", None)
 
     def __enter__(self) -> cassette:
         # 1. Push self.engine onto thread-local context stack
@@ -272,10 +278,10 @@ class cassette:
         self, fn: Callable[..., Any], *args: Any, **kwargs: Any
     ) -> dict[str, Any]:
         """Provides direct interception utility for testing."""
+        result = self.engine.handle_call(self.adapter, fn, *args, **kwargs)
         canonical_request = self.adapter.to_canonical_request(
             request=args[0] if args else None, **kwargs
         )
-        result = fn(*args, **kwargs)
         canonical_response = self.adapter.to_canonical_response(result, **kwargs)
         return {
             "request": canonical_request,

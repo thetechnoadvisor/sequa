@@ -38,7 +38,7 @@ def load_all_cassettes(path: str) -> list[tuple[str, dict[str, Any]]]:
 def resolve_cassette(
     target: str, cassettes: list[tuple[str, dict[str, Any]]]
 ) -> tuple[str, dict[str, Any]] | None:
-    """Helper to locate a cassette by file path, filename, hash, or ID."""
+    """Helper to locate a cassette by file path, directory path, filename, hash, or ID."""
     target = target.strip()
     if os.path.isfile(target):
         try:
@@ -47,6 +47,18 @@ def resolve_cassette(
         except Exception:
             pass
 
+    if os.path.isdir(target):
+        for root, _, files in os.walk(target):
+            for file in sorted(files):
+                if file.endswith(".json") and file != "metadata.json":
+                    fp = os.path.join(root, file)
+                    try:
+                        with open(fp, "r", encoding="utf-8") as f:
+                            return fp, json.load(f)
+                    except Exception:
+                        pass
+
+    # 1. Check exact matches or hash prefixes
     for path, data in cassettes:
         cass_id = data.get("id", "")
         cass_hash = data.get("hash", "")
@@ -55,6 +67,13 @@ def resolve_cassette(
         if target in (cass_id, cass_hash, filename, path) or (
             len(target) >= 4 and (cass_hash.startswith(target) or cass_id.startswith(target))
         ):
+            return path, data
+
+    # 2. Check path segment matches (e.g. "hello-run" in "/.../demo_cassettes/hello-run/langchain_groq/hash.json")
+    target_clean = target.strip("/").strip("\\")
+    for path, data in cassettes:
+        norm_path = path.replace("\\", "/")
+        if f"/{target_clean}/" in norm_path or norm_path.endswith(f"/{target_clean}") or target_clean in norm_path:
             return path, data
 
     return None
@@ -449,11 +468,12 @@ def cmd_search(args: argparse.Namespace) -> int:
 def cmd_replay(args: argparse.Namespace) -> int:
     """Inspect and generate code snippet to replay a specific cassette."""
     cassettes = load_all_cassettes(args.path)
-    res = resolve_cassette(args.target, cassettes)
+    target_val = getattr(args, "target", None) or getattr(args, "execution", "")
+    res = resolve_cassette(target_val, cassettes)
 
     if not res:
         print(
-            f"Error: Cassette matching '{args.target}' not found at path: {args.path}",
+            f"Error: Cassette matching '{target_val}' not found at path: {args.path}",
             file=sys.stderr,
         )
         return 1
@@ -514,6 +534,8 @@ def cmd_diff(args: argparse.Namespace) -> int:
     ignore_fields = getattr(args, "ignore_fields", None) or []
     json1_str = format_cassette_for_diff(data1, ignore_fields)
     json2_str = format_cassette_for_diff(data2, ignore_fields)
+    if getattr(args, "regression", False):
+        return cmd_regression(args)
 
     fmt = (getattr(args, "format", None) or "text").lower()
 
@@ -534,6 +556,63 @@ def cmd_diff(args: argparse.Namespace) -> int:
             return 1
     else:
         print(diff_output)
+
+    return 0
+
+
+def cmd_regression(args: argparse.Namespace) -> int:
+    """Run Phase 2 5-dimension regression test comparing reference cassette and new execution."""
+    cassettes = load_all_cassettes(args.path)
+
+    res1 = resolve_cassette(args.execution_1, cassettes)
+    res2 = resolve_cassette(args.execution_2, cassettes)
+
+    if not res1:
+        print(
+            f"Error: Reference execution '{args.execution_1}' not found at path: {args.path}",
+            file=sys.stderr,
+        )
+        return 1
+    if not res2:
+        print(
+            f"Error: New execution '{args.execution_2}' not found at path: {args.path}",
+            file=sys.stderr,
+        )
+        return 1
+
+    path1, data1 = res1
+    path2, data2 = res2
+
+    from sequa.regression import compare_executions, RegressionError
+
+    report = compare_executions(data1, data2)
+    fmt = (getattr(args, "format", None) or "text").lower()
+
+    if fmt == "html" or (args.output and args.output.endswith(".html")):
+        output_str = report.render_html()
+    elif fmt in ("markdown", "md") or (args.output and args.output.endswith(".md")):
+        output_str = report.render_markdown()
+    else:
+        output_str = report.render_text()
+
+    if args.output:
+        try:
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(output_str)
+            print(f"Regression report saved to: {args.output}")
+        except Exception as e:
+            print(f"Error writing file {args.output}: {e}", file=sys.stderr)
+            return 1
+    else:
+        print(output_str)
+
+    if getattr(args, "fail_on_drift", False):
+        threshold = getattr(args, "threshold", 0.85) or 0.85
+        try:
+            report.assert_no_regression(similarity_threshold=threshold)
+        except RegressionError as err:
+            print(f"Error: {err}", file=sys.stderr)
+            return 1
 
     return 0
 
@@ -563,7 +642,7 @@ def main() -> None:
     )
 
     # clean
-    parser_clean = subparsers.add_parser("clean", help="Clean or format stored cassettes.")
+    parser_clean = subparsers.add_parser("clean", help="Remove dynamic values from saved cassettes.")
     parser_clean.add_argument(
         "--path",
         "-p",
@@ -573,16 +652,18 @@ def main() -> None:
     parser_clean.add_argument(
         "--remove-latency",
         action="store_true",
+        default=False,
         help="Remove dynamic latency values from cassettes to avoid git diff noise.",
     )
     parser_clean.add_argument(
         "--remove-timestamps",
         action="store_true",
-        help="Redact/clear dynamic timestamps.",
+        default=False,
+        help="Remove dynamic timestamp values from cassettes.",
     )
 
     # log
-    parser_log = subparsers.add_parser("log", help="Git-like log listing execution cassettes chronologically.")
+    parser_log = subparsers.add_parser("log", help="Display chronological execution log.")
     parser_log.add_argument(
         "--path",
         "-p",
@@ -591,90 +672,43 @@ def main() -> None:
     )
     parser_log.add_argument(
         "-n",
-        "--number",
         type=int,
         default=10,
-        help="Maximum number of log entries to display.",
+        help="Number of recent executions to list (default: 10).",
     )
 
     # search
-    parser_search = subparsers.add_parser("search", help="Search cassettes with cosine similarity and time filters.")
-    parser_search.add_argument(
-        "query",
-        nargs="?",
-        default="",
-        help="Text query to search for using cosine similarity.",
-    )
+    parser_search = subparsers.add_parser("search", help="Search recorded cassettes by natural language.")
+    parser_search.add_argument("query", nargs="?", default="", help="Search query string.")
     parser_search.add_argument(
         "--path",
         "-p",
         default="cassettes",
-        help="Path to the cassettes directory (default: 'cassettes').",
+        help="Path to cassettes directory.",
     )
+    parser_search.add_argument("--since", "-s", help="Filter by relative time (e.g. '1d', 'yesterday').")
+    parser_search.add_argument("--until", "-u", help="Filter cassettes created until relative time or ISO date.")
+    parser_search.add_argument("--provider", help="Filter by provider name.")
+    parser_search.add_argument("--model", "-m", help="Filter by model name.")
+    parser_search.add_argument("-n", "--top-k", "-k", dest="top_k", type=int, default=5, help="Number of results (default: 5).")
     parser_search.add_argument(
-        "--since",
-        "-s",
-        help="Filter cassettes created since relative time (e.g. '10m', '2h', '1d') or ISO date.",
-    )
-    parser_search.add_argument(
-        "--until",
-        "-u",
-        help="Filter cassettes created until relative time or ISO date.",
-    )
-    parser_search.add_argument(
-        "--provider",
-        help="Filter by provider name (e.g. 'openai', 'groq', 'langchain_groq').",
-    )
-    parser_search.add_argument(
-        "--model",
-        "-m",
-        help="Filter by model name.",
-    )
-    parser_search.add_argument(
-        "--top-k",
-        "-k",
-        type=int,
-        default=5,
-        help="Number of top search results to return.",
-    )
-    parser_search.add_argument(
-        "--interactive",
         "-i",
+        "--interactive",
         action="store_true",
-        help="Interactively select a search result to view details, replay snippet, or diff two results.",
+        default=False,
+        help="Interactively select a search result.",
     )
 
     # replay
-    parser_replay = subparsers.add_parser("replay", help="Inspect and get replay snippet for a cassette.")
-    parser_replay.add_argument(
-        "target",
-        help="Hash, ID, or file path of the cassette to replay.",
-    )
-    parser_replay.add_argument(
-        "--path",
-        "-p",
-        default="cassettes",
-        help="Path to the cassettes directory (default: 'cassettes').",
-    )
+    parser_replay = subparsers.add_parser("replay", help="Inspect cassette & get replay snippet.")
+    parser_replay.add_argument("target", help="Hash, ID, or file path of cassette.")
+    parser_replay.add_argument("--path", "-p", default="cassettes", help="Path to cassettes directory.")
 
     # diff
-    parser_diff = subparsers.add_parser(
-        "diff", help="Compare two cassette recordings and display/save diff."
-    )
-    parser_diff.add_argument(
-        "execution_1",
-        help="Hash, ID, or file path of the first cassette execution.",
-    )
-    parser_diff.add_argument(
-        "execution_2",
-        help="Hash, ID, or file path of the second cassette execution.",
-    )
-    parser_diff.add_argument(
-        "--path",
-        "-p",
-        default="cassettes",
-        help="Path to the cassettes directory (default: 'cassettes').",
-    )
+    parser_diff = subparsers.add_parser("diff", help="Compare two cassette recordings.")
+    parser_diff.add_argument("execution_1", help="Hash, ID, or file path of first execution.")
+    parser_diff.add_argument("execution_2", help="Hash, ID, or file path of second execution.")
+    parser_diff.add_argument("--path", "-p", default="cassettes", help="Path to cassettes directory.")
     parser_diff.add_argument(
         "--format",
         "-f",
@@ -682,16 +716,41 @@ def main() -> None:
         default="text",
         help="Output format: text (default), markdown, or html.",
     )
+    parser_diff.add_argument("--output", "-o", help="File path to save output report.")
+    parser_diff.add_argument("--ignore-fields", nargs="*", default=[], help="Fields to exclude.")
     parser_diff.add_argument(
-        "--output",
-        "-o",
-        help="File path to save the diff output (e.g. diff.html or diff.md).",
+        "--regression",
+        action="store_true",
+        default=False,
+        help="Perform 5-dimension Phase 2 regression analysis.",
     )
-    parser_diff.add_argument(
-        "--ignore-fields",
-        nargs="*",
-        default=[],
-        help="Additional fields to exclude when computing diff.",
+
+    # regression
+    parser_reg = subparsers.add_parser(
+        "regression", help="Run 5-dimension Phase 2 regression diff (prompt, tool, semantic, cost, latency)."
+    )
+    parser_reg.add_argument("execution_1", help="Hash, ID, or file path of reference cassette.")
+    parser_reg.add_argument("execution_2", help="Hash, ID, or file path of new execution.")
+    parser_reg.add_argument("--path", "-p", default="cassettes", help="Path to cassettes directory.")
+    parser_reg.add_argument(
+        "--format",
+        "-f",
+        choices=["text", "markdown", "md", "html"],
+        default="text",
+        help="Output format: text (default), markdown, or html.",
+    )
+    parser_reg.add_argument("--output", "-o", help="File path to save output report.")
+    parser_reg.add_argument(
+        "--fail-on-drift",
+        action="store_true",
+        default=False,
+        help="Exit with non-zero status if semantic similarity drops below threshold.",
+    )
+    parser_reg.add_argument(
+        "--threshold",
+        type=float,
+        default=0.85,
+        help="Minimum similarity threshold (default: 0.85).",
     )
 
     args = parser.parse_args()
@@ -710,6 +769,8 @@ def main() -> None:
         sys.exit(cmd_replay(args))
     elif args.command == "diff":
         sys.exit(cmd_diff(args))
+    elif args.command == "regression":
+        sys.exit(cmd_regression(args))
 
 
 if __name__ == "__main__":
