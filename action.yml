@@ -1,5 +1,5 @@
-name: "Sequa LLM Cassette Testing"
-description: "Deterministic LLM testing & cassette playback with zero API costs using Sequa"
+name: "Sequa – Deterministic AI Testing ⭐"
+description: "Deterministic AI testing, replay, and regression testing for LLM applications. Reduce CI costs with recorded executions."
 author: "thetechnoadvisor"
 branding:
   icon: "disc"
