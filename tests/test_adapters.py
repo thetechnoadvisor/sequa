@@ -27,6 +27,27 @@ def test_openai_adapter_maps_request_and_response():
     assert response.usage["prompt_tokens"] == 1
 
 
+def test_canonical_request_system_and_user_messages():
+    req1 = CanonicalRequest(
+        provider="openai",
+        messages=[
+            {"role": "system", "content": "You are a helpful AI assistant."},
+            {"role": "user", "content": "What is gravity?"},
+        ],
+    )
+    assert req1.system_message == "You are a helpful AI assistant."
+    assert req1.user_message == "What is gravity?"
+
+    # Anthropic top-level system parameter
+    req2 = CanonicalRequest(
+        provider="anthropic",
+        messages=[{"role": "user", "content": "Explain relativity."}],
+        params={"system": "You are a physics professor."},
+    )
+    assert req2.system_message == "You are a physics professor."
+    assert req2.user_message == "Explain relativity."
+
+
 def test_registry_registers_and_resolves_adapters():
     registry = AdapterRegistry()
     registry.register(OpenAIAdapter())

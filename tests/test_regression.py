@@ -109,6 +109,12 @@ def test_compare_executions_all_dimensions(mock_cassette_pair):
     p_diff = report.prompt_diff
     assert isinstance(p_diff, PromptDiff)
     assert p_diff.has_changes is True
+    assert p_diff.system_message_changed is True
+    assert p_diff.user_message_changed is False
+    assert p_diff.old_system_message == "You are a helpful customer support AI."
+    assert p_diff.new_system_message == "You are an expert customer support assistant."
+    assert p_diff.old_user_message == "How do I request a refund for my order?"
+    assert p_diff.new_user_message == "How do I request a refund for my order?"
     assert "model" in p_diff.param_changes
     assert p_diff.param_changes["model"] == {"old": "gpt-4o-mini", "new": "gpt-4o"}
     assert p_diff.param_changes["temperature"] == {"old": 0.7, "new": 0.2}

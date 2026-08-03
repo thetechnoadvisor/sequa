@@ -64,17 +64,51 @@ class PromptDiff:
     new_system_prompt: str = ""
     old_user_prompt: str = ""
     new_user_prompt: str = ""
+    system_message_changed: bool = False
+    user_message_changed: bool = False
+
+    @property
+    def system_message_diff(self) -> str:
+        return self.system_prompt_diff
+
+    @property
+    def user_message_diff(self) -> str:
+        return self.user_prompt_diff
+
+    @property
+    def old_system_message(self) -> str:
+        return self.old_system_prompt
+
+    @property
+    def new_system_message(self) -> str:
+        return self.new_system_prompt
+
+    @property
+    def old_user_message(self) -> str:
+        return self.old_user_prompt
+
+    @property
+    def new_user_message(self) -> str:
+        return self.new_user_prompt
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "has_changes": self.has_changes,
+            "system_message_changed": self.system_message_changed,
+            "user_message_changed": self.user_message_changed,
             "system_prompt_diff": self.system_prompt_diff,
+            "system_message_diff": self.system_prompt_diff,
             "user_prompt_diff": self.user_prompt_diff,
+            "user_message_diff": self.user_prompt_diff,
             "param_changes": self.param_changes,
             "old_system_prompt": self.old_system_prompt,
+            "old_system_message": self.old_system_prompt,
             "new_system_prompt": self.new_system_prompt,
+            "new_system_message": self.new_system_prompt,
             "old_user_prompt": self.old_user_prompt,
+            "old_user_message": self.old_user_prompt,
             "new_user_prompt": self.new_user_prompt,
+            "new_user_message": self.new_user_prompt,
         }
 
 
@@ -271,17 +305,33 @@ class RegressionReport:
             lines.append("   ✓ Prompts and execution parameters identical")
         else:
             if self.prompt_diff.param_changes:
-                lines.append("   Parameter Changes:")
+                lines.append(f"   {c_bold}Parameter Changes:{c_reset}")
                 for k, v in self.prompt_diff.param_changes.items():
                     lines.append(f"     - {k}: {v['old']} ➔ {v['new']}")
-            if self.prompt_diff.system_prompt_diff:
-                lines.append("   System Prompt Diff:")
-                for line in self.prompt_diff.system_prompt_diff.splitlines()[:5]:
-                    lines.append(f"     {line}")
-            if self.prompt_diff.user_prompt_diff:
-                lines.append("   User Prompt Diff:")
-                for line in self.prompt_diff.user_prompt_diff.splitlines()[:5]:
-                    lines.append(f"     {line}")
+
+            lines.append(f"   {c_bold}⚙️ System Message / System Prompt:{c_reset}")
+            if not self.prompt_diff.system_message_changed:
+                val = f"\"{self.prompt_diff.old_system_prompt}\"" if self.prompt_diff.old_system_prompt else "(None)"
+                lines.append(f"     ✓ Unchanged: {val}")
+            else:
+                lines.append(f"     Reference (Old) : \"{self.prompt_diff.old_system_prompt}\"")
+                lines.append(f"     New Execution   : \"{self.prompt_diff.new_system_prompt}\"")
+                if self.prompt_diff.system_prompt_diff:
+                    lines.append("     Diff:")
+                    for line in self.prompt_diff.system_prompt_diff.splitlines()[:5]:
+                        lines.append(f"       {line}")
+
+            lines.append(f"   {c_bold}💬 User Message / User Prompt:{c_reset}")
+            if not self.prompt_diff.user_message_changed:
+                val = f"\"{self.prompt_diff.old_user_prompt}\"" if self.prompt_diff.old_user_prompt else "(None)"
+                lines.append(f"     ✓ Unchanged: {val}")
+            else:
+                lines.append(f"     Reference (Old) : \"{self.prompt_diff.old_user_prompt}\"")
+                lines.append(f"     New Execution   : \"{self.prompt_diff.new_user_prompt}\"")
+                if self.prompt_diff.user_prompt_diff:
+                    lines.append("     Diff:")
+                    for line in self.prompt_diff.user_prompt_diff.splitlines()[:5]:
+                        lines.append(f"       {line}")
 
         lines.extend([
             f"──────────────────────────────────────────────────────────────────────────────",
@@ -384,22 +434,34 @@ class RegressionReport:
             md.append("_No prompt or parameter changes detected._\n")
         else:
             if self.prompt_diff.param_changes:
-                md.append("### Parameter Changes\n")
+                md.append("### Model Parameter Changes\n")
                 md.append("| Parameter | Old Value | New Value |")
                 md.append("| :--- | :--- | :--- |")
                 for k, v in self.prompt_diff.param_changes.items():
                     md.append(f"| `{k}` | `{v['old']}` | `{v['new']}` |")
                 md.append("")
 
-            if self.prompt_diff.system_prompt_diff:
-                md.append("### System Prompt Diff\n```diff")
-                md.append(self.prompt_diff.system_prompt_diff)
-                md.append("```\n")
+            md.append("### ⚙️ System Message / System Prompt\n")
+            if not self.prompt_diff.system_message_changed:
+                md.append(f"_✓ Unchanged:_ `{self.prompt_diff.old_system_prompt or '(None)'}`\n")
+            else:
+                md.append(f"- **Old (Reference):** `{self.prompt_diff.old_system_prompt}`")
+                md.append(f"- **New (Execution):** `{self.prompt_diff.new_system_prompt}`\n")
+                if self.prompt_diff.system_prompt_diff:
+                    md.append("```diff")
+                    md.append(self.prompt_diff.system_prompt_diff)
+                    md.append("```\n")
 
-            if self.prompt_diff.user_prompt_diff:
-                md.append("### User Prompt Diff\n```diff")
-                md.append(self.prompt_diff.user_prompt_diff)
-                md.append("```\n")
+            md.append("### 💬 User Message / User Prompt\n")
+            if not self.prompt_diff.user_message_changed:
+                md.append(f"_✓ Unchanged:_ `{self.prompt_diff.old_user_prompt or '(None)'}`\n")
+            else:
+                md.append(f"- **Old (Reference):** `{self.prompt_diff.old_user_prompt}`")
+                md.append(f"- **New (Execution):** `{self.prompt_diff.new_user_prompt}`\n")
+                if self.prompt_diff.user_prompt_diff:
+                    md.append("```diff")
+                    md.append(self.prompt_diff.user_prompt_diff)
+                    md.append("```\n")
 
         md.append("## 2. 🛠️ Tool Diff\n")
         if not self.tool_diff.has_changes:
@@ -533,29 +595,41 @@ def _extract_prompts_and_params(
     if not isinstance(req, dict):
         return "", "", {}
 
-    system_prompt = ""
+    system_prompts: list[str] = []
     user_prompts: list[str] = []
 
+    # 1. Top-level system prompt parameters (e.g. Anthropic system or Gemini system_instruction)
+    for sys_key in ("system", "system_instruction", "system_prompt", "system_message"):
+        val = req.get(sys_key)
+        if isinstance(val, str) and val.strip():
+            system_prompts.append(val.strip())
+
+    # 2. Extract from messages list
     messages = req.get("messages")
     if isinstance(messages, list):
         for msg in messages:
             if isinstance(msg, dict):
-                role = msg.get("role", "").lower()
+                role = str(msg.get("role", "")).lower()
                 content = msg.get("content", "")
                 if isinstance(content, list):
                     text_parts = [
-                        p.get("text", "")
+                        p.get("text", "") if isinstance(p, dict) else str(p)
                         for p in content
-                        if isinstance(p, dict) and p.get("type") == "text"
+                        if not isinstance(p, dict) or p.get("type") == "text"
                     ]
                     content = "\n".join(text_parts)
 
                 if role in ("system", "developer"):
-                    system_prompt += f"{content}\n"
+                    system_prompts.append(str(content))
                 elif role in ("user", "human"):
                     user_prompts.append(str(content))
     elif isinstance(req.get("prompt"), str):
         user_prompts.append(req["prompt"])
+
+    for usr_key in ("user_prompt", "user_message"):
+        val = req.get(usr_key)
+        if isinstance(val, str) and val.strip() and val not in user_prompts:
+            user_prompts.append(val.strip())
 
     params: dict[str, Any] = {}
     known_param_keys = [
@@ -572,7 +646,10 @@ def _extract_prompts_and_params(
         if key in req:
             params[key] = req[key]
 
-    return system_prompt.strip(), "\n---\n".join(user_prompts).strip(), params
+    sys_text = "\n".join(system_prompts).strip()
+    usr_text = "\n---\n".join(user_prompts).strip()
+
+    return sys_text, usr_text, params
 
 
 def _extract_tool_calls(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -784,9 +861,14 @@ def compare_executions(
             )
         )
 
-    prompt_has_changes = bool(sys_diff or usr_diff or param_changes)
+    sys_changed = bool(old_sys != new_sys)
+    usr_changed = bool(old_usr != new_usr)
+
+    prompt_has_changes = bool(sys_changed or usr_changed or param_changes)
     prompt_diff_obj = PromptDiff(
         has_changes=prompt_has_changes,
+        system_message_changed=sys_changed,
+        user_message_changed=usr_changed,
         system_prompt_diff=sys_diff,
         user_prompt_diff=usr_diff,
         param_changes=param_changes,
